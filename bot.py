@@ -2077,23 +2077,20 @@ def text_handler(message):
         if text == "🔄 Ongoing Boshqarish":
             conn = sqlite3.connect('kino_bot.db', timeout=30)
             cursor = conn.cursor()
-            cursor.execute("SELECT code, title, is_ongoing FROM movies WHERE is_series = 1 ORDER BY added_at DESC")
+            cursor.execute("SELECT code, title, is_ongoing FROM movies WHERE is_series = 1 AND is_ongoing = 1 ORDER BY added_at DESC")
             serials = cursor.fetchall()
             conn.close()
             if not serials:
-                bot.send_message(user_id, "📭 Hali serial yo'q.")
+                bot.send_message(user_id, "📭 Hozirda ongoing serial yo'q.")
                 return
             kb = InlineKeyboardMarkup(row_width=1)
             for code, title, is_ongoing in serials:
-                badge = "🔄 " if is_ongoing else "✅ "
-                label = f"{badge}{title[:35]} [{code}]"
+                label = f"🔄 {title[:35]} [{code}]"
                 kb.add(InlineKeyboardButton(label, callback_data=f"ongoing_toggle_{code}"))
             bot.send_message(
                 user_id,
-                "🔄 <b>ONGOING BOSHQARISH</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
-                "🔄 = Hozir ongoing (bosing — tugallangan qiling)\n"
-                "✅ = Tugallangan (bosing — ongoing qiling)\n\n"
-                "Serialni bosib holatini o'zgartiring:",
+                f"🔄 <b>ONGOING SERIALLAR</b> ({len(serials)} ta)\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Serialga bosib yangi qism qo'shing yoki tugallangan qiling:\n\n",
                 reply_markup=kb
             )
             return
@@ -2770,13 +2767,12 @@ def callback_handler(call):
         if data == "ongoing_list" and is_admin(user_id):
             conn = sqlite3.connect('kino_bot.db', timeout=30)
             cursor = conn.cursor()
-            cursor.execute("SELECT code, title, is_ongoing FROM movies WHERE is_series = 1 ORDER BY added_at DESC")
+            cursor.execute("SELECT code, title, is_ongoing FROM movies WHERE is_series = 1 AND is_ongoing = 1 ORDER BY added_at DESC")
             serials = cursor.fetchall()
             conn.close()
             kb = InlineKeyboardMarkup(row_width=1)
             for sc, st, sio in serials:
-                badge = "🔄 " if sio else "✅ "
-                lb = f"{badge}{st[:35]} [{sc}]"
+                lb = f"🔄 {st[:35]} [{sc}]"
                 kb.add(InlineKeyboardButton(lb, callback_data=f"ongoing_toggle_{sc}"))
             bot.answer_callback_query(call.id)
             try:
