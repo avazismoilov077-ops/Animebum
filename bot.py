@@ -1022,6 +1022,8 @@ def send_series_episode(chat_id: int, movie: dict, episode_num: int):
         f"▶️ <b>{episode_num}-qism</b> / Jami: {total} qism\n"
         f"🔢 <b>Kod:</b> <code>{movie['code']}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💡 Tezlashib ketsa — <b>Galereyaga yuklab oling</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📺 Boshqa qismni tanlang:"
     )
 
@@ -2417,18 +2419,41 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id, "❌ Kino topilmadi!")
             return
 
-        # Kategoriya kinolar
-        if data.startswith("category_"):
-            category = data.replace("category_", "")
+        # Kategoriya kinolar (sahifalash bilan)
+        if data.startswith("category_") or data.startswith("catpage_"):
+            GENRE_PAGE_SIZE = 10
+            if data.startswith("catpage_"):
+                parts = data.replace("catpage_", "").rsplit("_", 1)
+                category = parts[0]
+                page = int(parts[1])
+            else:
+                category = data.replace("category_", "")
+                page = 0
             movies = get_movies_by_category(category)
             if not movies:
                 bot.answer_callback_query(call.id, f"❌ '{category}' janrida kino yo'q!")
                 return
-            text_msg = f"📂 <b>{category}</b> janri\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+            total = len(movies)
+            total_pages = (total + GENRE_PAGE_SIZE - 1) // GENRE_PAGE_SIZE
+            page = max(0, min(page, total_pages - 1))
+            start = page * GENRE_PAGE_SIZE
+            page_movies = movies[start:start + GENRE_PAGE_SIZE]
+            text_msg = (
+                f"📂 <b>{category}</b> janri — {total} ta\n"
+                f"📄 {page+1}/{total_pages} sahifa\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            )
             keyboard = InlineKeyboardMarkup(row_width=1)
-            for code, title, views in movies:
+            for code, title, views in page_movies:
                 text_msg += f"🎬 <b>{title}</b>\n   👁️ {views} | 🔢 <code>{code}</code>\n\n"
                 keyboard.add(InlineKeyboardButton(f"▶️ {title[:30]}", callback_data=f"get_movie_{code}"))
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton("⬅️ Oldingi", callback_data=f"catpage_{category}_{page-1}"))
+            if page < total_pages - 1:
+                nav.append(InlineKeyboardButton("➡️ Keyingi", callback_data=f"catpage_{category}_{page+1}"))
+            if nav:
+                keyboard.row(*nav)
             bot.answer_callback_query(call.id)
             bot.send_message(user_id, text_msg, reply_markup=keyboard)
             return
