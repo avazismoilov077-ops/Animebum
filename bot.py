@@ -153,6 +153,11 @@ def create_database():
         pass
 
     try:
+        cursor.execute("ALTER TABLE movies ADD COLUMN content_type TEXT DEFAULT 'anime'")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
         cursor.execute('ALTER TABLE movies ADD COLUMN poster_file_id TEXT DEFAULT ""')
     except sqlite3.OperationalError:
         pass
@@ -490,15 +495,16 @@ def get_movie(code: str) -> Optional[dict]:
     return None
 
 def add_movie_db(code: str, title: str, description: str, file_id: str,
-                 file_type: str, category: str, is_series: int, added_by: int) -> bool:
+                 file_type: str, category: str, is_series: int, added_by: int,
+                 content_type: str = 'anime') -> bool:
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
     try:
         cursor.execute('''
             INSERT INTO movies (code, title, description, file_id, file_type,
-                               category, is_series, added_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (code, title, description, file_id, file_type, category, is_series, added_by))
+                               category, is_series, added_by, content_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (code, title, description, file_id, file_type, category, is_series, added_by, content_type))
         conn.commit()
         return True
     except sqlite3.IntegrityError:
@@ -540,11 +546,11 @@ def get_latest_movies(limit: int = 10) -> list:
     return movies
 
 def get_movies_by_category(category: str) -> list:
-    """Janr bo'yicha qidirish — ko'p janrli kino/seriallarni ham topadi"""
+    """Janr bo'yicha qidirish — faqat anime (drama kanal emas)"""
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
     cursor.execute(
-        'SELECT code, title, views FROM movies WHERE category LIKE ?',
+        "SELECT code, title, views FROM movies WHERE category LIKE ? AND (content_type IS NULL OR content_type = 'anime')",
         (f'%{category}%',)
     )
     movies = cursor.fetchall()
@@ -1355,10 +1361,29 @@ def add_movie_command(message):
     if not is_admin(user_id):
         bot.send_message(user_id, "❌ Sizda admin huquqlari yo'q!")
         return
-    set_state(user_id, 'add_movie_code')
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("🎌 Anime bot uchun", callback_data="admin_ctype_anime"),
+        InlineKeyboardButton("🎭 Drama kanal uchun", callback_data="admin_ctype_drama")
+    )
+    set_state(user_id, 'add_movie_choose_type')
     bot.send_message(
         user_id,
         "➕ <b>Yangi Anime / Serial Qo'shish</b>\n\n"
+        "Bu kontent qaysi uchun?",
+        reply_markup=kb
+    )
+
+@bot.message_handler(commands=['addmovie_start_internal'])
+def _add_movie_start(message):
+    pass
+
+def _start_add_movie_flow(user_id, content_type='anime'):
+    set_state(user_id, 'add_movie_code', {'content_type': content_type})
+    label = "🎌 Anime bot" if content_type == 'anime' else "🎭 Drama kanal"
+    bot.send_message(
+        user_id,
+        f"➕ <b>{label} uchun qo'shilmoqda</b>\n\n"
         "❗ Istalgan qadamda <b>orqaga</b> yozing — oldingi bosqichga qaytish\n"
         "❗ Ko'pchilik maydonlar uchun <b>skip</b> yozing — o'tkazib yuborish\n\n"
         "1️⃣ Kodini kiriting (masalan: <code>101</code>):",
@@ -1665,7 +1690,9 @@ def text_handler(message):
         if get_movie(text):
             bot.send_message(user_id, f"❌ <code>{text}</code> kodli anime allaqachon mavjud!\nBoshqa kod kiriting:")
             return
-        set_state(user_id, 'add_movie_title', {'code': text})
+        data = state.get('data', {})
+        data['code'] = text
+        set_state(user_id, 'add_movie_title', data)
         bot.send_message(user_id, f"✅ Kod: <code>{text}</code>\n\n2️⃣ Nomini kiriting:")
         return
 
@@ -1881,7 +1908,8 @@ def text_handler(message):
             file_type='video',
             category=data.get('category', 'Umumiy'),
             is_series=1,
-            added_by=user_id
+            added_by=user_id,
+            content_type=data.get('content_type', 'anime')
         )
         if is_ongoing:
             set_movie_ongoing(data['code'], 1)
@@ -2204,7 +2232,8 @@ def file_handler(message):
             file_type=file_type,
             category=data.get('category', 'Umumiy'),
             is_series=0,
-            added_by=user_id
+            added_by=user_id,
+            content_type=data.get('content_type', 'anime')
         )
         clear_state(user_id)
         if success:
@@ -2517,6 +2546,13 @@ def callback_handler(call):
                         f"✅ Janrlar: <b>{category_str}</b>\n\n7️⃣ Bu kino yoki serialmi?",
                         reply_markup=kb
                     )
+            return
+
+        # Admin content type tanlash (anime yoki drama)
+        if data.startswith("admin_ctype_") and is_admin(user_id):
+            ctype = data.replace("admin_ctype_", "")
+            bot.answer_callback_query(call.id, "✅ Tanlandi")
+            _start_add_movie_flow(user_id, content_type=ctype)
             return
 
         # Admin kino/serial turi tanlash
