@@ -1552,6 +1552,43 @@ def set_drama_channel_command(message):
         f"Endi drama postlari shu kanalga chiqadi."
     )
 
+@bot.message_handler(commands=['setdramatype'])
+def set_drama_type_command(message):
+    """Mavjud kontentni drama yoki anime deb belgilash"""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.send_message(user_id, "❌ Sizda admin huquqlari yo'q!")
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.send_message(
+            user_id,
+            "🎭 <b>Kontent turini o'zgartirish</b>\n\n"
+            "Ishlatish:\n"
+            "<code>/setdramatype KOD</code> — Drama kanalga o'tkazish\n"
+            "<code>/setdramatype KOD anime</code> — Anime botga qaytarish\n\n"
+            "Misol: <code>/setdramatype D5</code>"
+        )
+        return
+    code = parts[1].strip()
+    new_type = 'anime' if (len(parts) >= 3 and parts[2].strip().lower() == 'anime') else 'drama'
+    movie = get_movie(code)
+    if not movie:
+        bot.send_message(user_id, f"❌ <code>{code}</code> kodli kino topilmadi!")
+        return
+    conn = sqlite3.connect('kino_bot.db')
+    conn.execute("UPDATE movies SET content_type = ? WHERE code = ?", (new_type, code))
+    conn.commit()
+    conn.close()
+    label = "🎭 Drama kanal" if new_type == 'drama' else "🎌 Anime bot"
+    bot.send_message(
+        user_id,
+        f"✅ <b>{movie['title']}</b>\n"
+        f"Kod: <code>{code}</code>\n"
+        f"Tur: {label}\n\n"
+        f"Endi janr qidiruvida {'chiqmaydi' if new_type == 'drama' else 'chiqadi'}."
+    )
+
 @bot.message_handler(commands=['broadcast'])
 def broadcast_command(message):
     user_id = message.from_user.id
