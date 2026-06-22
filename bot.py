@@ -43,7 +43,7 @@ GENRES = [
     "Sport", "O'zga dunya", "Jangari", "Kundalik hayot",
     "Garem", "Etti", "Mexa", "Komediya",
     "Fantaziya", "Drama", "Sarguzasht", "Fantastika",
-    "Romantika", "Maktab"
+    "Romantika", "Maktab", "Sehir"
 ]
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -575,13 +575,40 @@ def get_all_categories() -> list:
     return categories
 
 def get_genre_movie_count(genre: str) -> int:
-    """Berilgan janrga tegishli kino/serial sonini hisoblash"""
+    """Berilgan janrga tegishli anime sonini hisoblash (drama emas)"""
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM movies WHERE category LIKE ?', (f'%{genre}%',))
+    cursor.execute(
+        "SELECT COUNT(*) FROM movies WHERE category LIKE ? AND (content_type IS NULL OR content_type = 'anime')",
+        (f'%{genre}%',)
+    )
     count = cursor.fetchone()[0]
     conn.close()
     return count
+
+def get_drama_genre_count(genre: str) -> int:
+    """Berilgan janrga tegishli drama sonini hisoblash"""
+    conn = sqlite3.connect('kino_bot.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COUNT(*) FROM movies WHERE category LIKE ? AND content_type = 'drama'",
+        (f'%{genre}%',)
+    )
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+def get_dramas_by_category(category: str) -> list:
+    """Janr bo'yicha drama qidirish"""
+    conn = sqlite3.connect('kino_bot.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT code, title, views FROM movies WHERE category LIKE ? AND content_type = 'drama'",
+        (f'%{category}%',)
+    )
+    movies = cursor.fetchall()
+    conn.close()
+    return movies
 
 def rate_movie(user_id: int, movie_code: str, rating: int) -> str:
     conn = sqlite3.connect('kino_bot.db')
@@ -885,7 +912,7 @@ def show_channels_menu(user_id: int):
     bot.send_message(user_id, text, reply_markup=keyboard)
 
 def get_category_keyboard() -> InlineKeyboardMarkup:
-    """Barcha belgilangan janrlarni ko'rsatadi, har birida mavjud kino soni bilan"""
+    """Anime janrlarini ko'rsatadi + Drama janrlari bo'limi"""
     keyboard = InlineKeyboardMarkup(row_width=3)
     buttons = []
     for genre in GENRES:
@@ -893,6 +920,19 @@ def get_category_keyboard() -> InlineKeyboardMarkup:
         label = f"{genre} ({count})" if count > 0 else genre
         buttons.append(InlineKeyboardButton(label, callback_data=f"category_{genre}"))
     keyboard.add(*buttons)
+    keyboard.add(InlineKeyboardButton("🎭 Drama Janrlari", callback_data="drama_genres_menu"))
+    return keyboard
+
+def get_drama_category_keyboard() -> InlineKeyboardMarkup:
+    """Drama janrlarini ko'rsatadi"""
+    keyboard = InlineKeyboardMarkup(row_width=3)
+    buttons = []
+    for genre in GENRES:
+        count = get_drama_genre_count(genre)
+        label = f"{genre} ({count})" if count > 0 else genre
+        buttons.append(InlineKeyboardButton(label, callback_data=f"drama_cat_{genre}"))
+    keyboard.add(*buttons)
+    keyboard.add(InlineKeyboardButton("🎌 Anime Janrlariga qaytish", callback_data="show_categories"))
     return keyboard
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -2485,7 +2525,56 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id, "❌ Kino topilmadi!")
             return
 
-        # Kategoriya kinolar (sahifalash bilan)
+        # Drama janrlar menyusi
+        if data == "drama_genres_menu":
+            bot.answer_callback_query(call.id)
+            bot.send_message(
+                user_id,
+                "🎭 <b>Drama Janrlari</b>\nJanrni tanlang:",
+                reply_markup=get_drama_category_keyboard()
+            )
+            return
+
+        # Drama kategoriya kinolar (sahifalash bilan)
+        if data.startswith("drama_cat_") or data.startswith("drmapage_"):
+            GENRE_PAGE_SIZE = 10
+            if data.startswith("drmapage_"):
+                parts = data.replace("drmapage_", "").rsplit("_", 1)
+                category = parts[0]
+                page = int(parts[1])
+            else:
+                category = data.replace("drama_cat_", "")
+                page = 0
+            movies = get_dramas_by_category(category)
+            if not movies:
+                bot.answer_callback_query(call.id, f"❌ '{category}' janrida drama yo'q!")
+                return
+            total = len(movies)
+            total_pages = (total + GENRE_PAGE_SIZE - 1) // GENRE_PAGE_SIZE
+            page = max(0, min(page, total_pages - 1))
+            start = page * GENRE_PAGE_SIZE
+            page_movies = movies[start:start + GENRE_PAGE_SIZE]
+            text_msg = (
+                f"🎭 <b>{category}</b> — {total} ta drama\n"
+                f"📄 {page+1}/{total_pages} sahifa\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            )
+            keyboard = InlineKeyboardMarkup(row_width=1)
+            for code, title, views in page_movies:
+                keyboard.add(InlineKeyboardButton(f"▶️ {title[:35]}", callback_data=f"get_movie_{code}"))
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton("⬅️ Oldingi", callback_data=f"drmapage_{category}_{page-1}"))
+            if page < total_pages - 1:
+                nav.append(InlineKeyboardButton("➡️ Keyingi", callback_data=f"drmapage_{category}_{page+1}"))
+            if nav:
+                keyboard.row(*nav)
+            keyboard.add(InlineKeyboardButton("🔙 Drama Janrlari", callback_data="drama_genres_menu"))
+            bot.answer_callback_query(call.id)
+            bot.send_message(user_id, text_msg, reply_markup=keyboard)
+            return
+
+        # Anime kategoriya kinolar (sahifalash bilan)
         if data.startswith("category_") or data.startswith("catpage_"):
             GENRE_PAGE_SIZE = 10
             if data.startswith("catpage_"):
@@ -2497,7 +2586,7 @@ def callback_handler(call):
                 page = 0
             movies = get_movies_by_category(category)
             if not movies:
-                bot.answer_callback_query(call.id, f"❌ '{category}' janrida kino yo'q!")
+                bot.answer_callback_query(call.id, f"❌ '{category}' janrida anime yo'q!")
                 return
             total = len(movies)
             total_pages = (total + GENRE_PAGE_SIZE - 1) // GENRE_PAGE_SIZE
@@ -2505,14 +2594,13 @@ def callback_handler(call):
             start = page * GENRE_PAGE_SIZE
             page_movies = movies[start:start + GENRE_PAGE_SIZE]
             text_msg = (
-                f"📂 <b>{category}</b> janri — {total} ta\n"
+                f"🎌 <b>{category}</b> — {total} ta anime\n"
                 f"📄 {page+1}/{total_pages} sahifa\n"
-                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
             )
             keyboard = InlineKeyboardMarkup(row_width=1)
             for code, title, views in page_movies:
-                text_msg += f"🎬 <b>{title}</b>\n   👁️ {views} | 🔢 <code>{code}</code>\n\n"
-                keyboard.add(InlineKeyboardButton(f"▶️ {title[:30]}", callback_data=f"get_movie_{code}"))
+                keyboard.add(InlineKeyboardButton(f"▶️ {title[:35]}", callback_data=f"get_movie_{code}"))
             nav = []
             if page > 0:
                 nav.append(InlineKeyboardButton("⬅️ Oldingi", callback_data=f"catpage_{category}_{page-1}"))
