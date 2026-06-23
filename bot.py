@@ -490,7 +490,7 @@ def get_movie(code: str) -> Optional[dict]:
     if row:
         columns = ['id', 'code', 'title', 'description', 'file_id', 'file_type',
                    'category', 'is_series', 'views', 'rating_sum', 'rating_count',
-                   'added_by', 'added_at', 'is_ongoing', 'poster_file_id']
+                   'added_by', 'added_at', 'is_ongoing', 'content_type', 'poster_file_id']
         return dict(zip(columns, row[:len(columns)]))
     return None
 
