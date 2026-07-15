@@ -988,16 +988,16 @@ def send_movie(chat_id: int, movie: dict, user_status: str = 'user'):
         ongoing_line = "🔄 <b>Holati:</b> Davom etmoqda\n" if movie.get('is_ongoing') else ""
         poster_id = movie.get('poster_file_id') or ''
 
+        ongoing_status = "🟢 Davom etmoqda" if movie.get('is_ongoing') else "🔴 Tugagan"
         caption = (
-            f"📺 <b>{movie['title']}{ongoing_badge}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📝 <b>Tavsif:</b> {movie['description'] or 'Mavjud emas'}\n"
-            f"📂 <b>Kategoriya:</b> {movie['category']}\n"
-            f"🔢 <b>Kod:</b> <code>{movie['code']}</code>\n"
-            f"🎞 <b>Jami qismlar:</b> {total} qism\n"
-            f"{ongoing_line}"
-            f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📺 Quyidagi raqamlardan kerakli qismni tanlang:"
+            f"🎌 <b>{movie['title']}{ongoing_badge}</b>\n\n"
+            f"┌{'─'*21}\n"
+            f"│ 📂 <b>Janr:</b> {movie['category']}\n"
+            f"│ 🎞 <b>Qismlar:</b> {total} ta\n"
+            f"│ 📌 <b>Holat:</b> {ongoing_status}\n"
+            f"│ 🔢 <b>Kod:</b> <code>{movie['code']}</code>\n"
+            f"└{'─'*21}\n\n"
+            f"👇 <b>Qismni tanlang:</b>"
         )
 
         ep_keyboard = get_episodes_keyboard(movie['code'], total, viewer_id=chat_id, page=0)
@@ -1026,14 +1026,13 @@ def send_movie(chat_id: int, movie: dict, user_status: str = 'user'):
 
     # ── KINO ────────────────────────────────────────────────────
     caption = (
-        f"🎬 <b>{movie['title']}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📝 <b>Tavsif:</b> {movie['description'] or 'Mavjud emas'}\n"
-        f"📂 <b>Kategoriya:</b> {movie['category']}\n"
-        f"🔢 <b>Kod:</b> <code>{movie['code']}</code>\n"
-        f"👁️ <b>Ko'rishlar:</b> {movie['views']}\n"
-        f"⭐ <b>Reyting:</b> {stars} ({rating:.1f}/5.0)\n"
-        f"━━━━━━━━━━━━━━━━━━━━━"
+        f"🎬 <b>{movie['title']}</b>\n\n"
+        f"┌{'─'*21}\n"
+        f"│ 📂 <b>Janr:</b> {movie['category']}\n"
+        f"│ 🔢 <b>Kod:</b> <code>{movie['code']}</code>\n"
+        f"│ 👁 <b>Ko'rishlar:</b> {movie['views']}\n"
+        f"│ ⭐ <b>Reyting:</b> {stars} ({rating:.1f}/5)\n"
+        f"└{'─'*21}"
     )
 
     try:
@@ -1063,14 +1062,13 @@ def send_series_episode(chat_id: int, movie: dict, episode_num: int):
         return
 
     caption = (
-        f"📺 <b>{movie['title']}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"▶️ <b>{episode_num}-qism</b> / Jami: {total} qism\n"
-        f"🔢 <b>Kod:</b> <code>{movie['code']}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💡 Tezlashib ketsa — <b>Galereyaga yuklab oling</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📺 Boshqa qismni tanlang:"
+        f"🎌 <b>{movie['title']}</b>\n"
+        f"▶️ <b>{episode_num}-qism</b> / {total} ta\n\n"
+        f"┌{'─'*21}\n"
+        f"│ 🔢 <b>Kod:</b> <code>{movie['code']}</code>\n"
+        f"│ 💾 Galereyaga saqlash mumkin\n"
+        f"└{'─'*21}\n\n"
+        f"👇 <b>Boshqa qismni tanlang:</b>"
     )
 
     ep_keyboard = get_episodes_keyboard(movie['code'], total, viewer_id=chat_id, page=(episode_num - 1) // EPISODES_PER_PAGE)
