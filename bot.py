@@ -2001,7 +2001,10 @@ def text_handler(message):
 
     if state.get('state') == 'add_channel_id' and is_admin(user_id):
         ch_id = text.strip()
-        if not ch_id.startswith('@') and not ch_id.startswith('-'):
+        if ch_id.startswith('http://') or ch_id.startswith('https://'):
+            ch_id = ch_id.rstrip('/').split('/')[-1]
+        ch_id = ch_id.lstrip('@')
+        if not ch_id.startswith('-'):
             ch_id = '@' + ch_id
         set_state(user_id, 'add_channel_name', {'channel_id': ch_id})
         bot.send_message(user_id, f"✅ Kanal ID: <code>{ch_id}</code>\n\n2️⃣ Kanal nomini kiriting (masalan: <b>📢 Asosiy Kanal</b>):")
