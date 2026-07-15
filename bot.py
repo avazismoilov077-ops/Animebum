@@ -1005,15 +1005,15 @@ def send_movie(chat_id: int, movie: dict, user_status: str = 'user'):
         try:
             if poster_id:
                 bot.send_photo(chat_id, photo=poster_id, caption=caption,
-                               reply_markup=ep_keyboard, protect_content=True)
+                               reply_markup=ep_keyboard)
             else:
                 ep1 = episodes[0]
                 if ep1['file_type'] == 'video':
                     bot.send_video(chat_id, video=ep1['file_id'], caption=caption,
-                                   reply_markup=ep_keyboard, protect_content=True)
+                                   reply_markup=ep_keyboard)
                 elif ep1['file_type'] == 'document':
                     bot.send_document(chat_id, document=ep1['file_id'], caption=caption,
-                                      reply_markup=ep_keyboard, protect_content=True)
+                                      reply_markup=ep_keyboard)
                 else:
                     bot.send_message(chat_id, caption, reply_markup=ep_keyboard)
 
@@ -1038,11 +1038,11 @@ def send_movie(chat_id: int, movie: dict, user_status: str = 'user'):
 
     try:
         if movie['file_type'] == 'video':
-            bot.send_video(chat_id, video=movie['file_id'], caption=caption, reply_markup=rating_keyboard, protect_content=True)
+            bot.send_video(chat_id, video=movie['file_id'], caption=caption, reply_markup=rating_keyboard)
         elif movie['file_type'] == 'document':
-            bot.send_document(chat_id, document=movie['file_id'], caption=caption, reply_markup=rating_keyboard, protect_content=True)
+            bot.send_document(chat_id, document=movie['file_id'], caption=caption, reply_markup=rating_keyboard)
         elif movie['file_type'] == 'photo':
-            bot.send_photo(chat_id, photo=movie['file_id'], caption=caption, reply_markup=rating_keyboard, protect_content=True)
+            bot.send_photo(chat_id, photo=movie['file_id'], caption=caption, reply_markup=rating_keyboard)
         else:
             bot.send_message(chat_id, caption, reply_markup=rating_keyboard)
 
@@ -1077,9 +1077,9 @@ def send_series_episode(chat_id: int, movie: dict, episode_num: int):
 
     try:
         if ep['file_type'] == 'video':
-            bot.send_video(chat_id, video=ep['file_id'], caption=caption, reply_markup=ep_keyboard, protect_content=True)
+            bot.send_video(chat_id, video=ep['file_id'], caption=caption, reply_markup=ep_keyboard)
         elif ep['file_type'] == 'document':
-            bot.send_document(chat_id, document=ep['file_id'], caption=caption, reply_markup=ep_keyboard, protect_content=True)
+            bot.send_document(chat_id, document=ep['file_id'], caption=caption, reply_markup=ep_keyboard)
         else:
             bot.send_message(chat_id, caption, reply_markup=ep_keyboard)
         logger.info(f"✅ Serial qism yuborildi: [{movie['code']}] {episode_num}-qism -> {chat_id}")
