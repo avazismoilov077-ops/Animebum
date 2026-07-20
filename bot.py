@@ -29,7 +29,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
 # ║                    ⚙️ BOT SOZLAMALARI                        ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-BOT_TOKEN = "8746287840:AAEjaeBqz89607bs0_W34DeFGvjLx13B9RY"
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '8746287840:AAEjaeBqz89607bs0_W34DeFGvjLx13B9RY')
 ADMIN_IDS = [6998664132]
 
 BOT_USERNAME = "animebum_bot"
@@ -83,6 +83,23 @@ def health():
 def run_keep_alive():
     port = int(os.environ.get('PORT', os.environ.get('KEEP_ALIVE_PORT', 8000)))
     _flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+
+def self_ping():
+    """Render uxlab qolmasligi uchun har 4 daqiqada o'ziga ping — UptimeRobot to'xtab qolsa ham ishlaydi"""
+    import requests as _req
+    render_url = os.environ.get('RENDER_EXTERNAL_URL', '').rstrip('/')
+    if not render_url:
+        logger.info("ℹ️ RENDER_EXTERNAL_URL yo'q — self-ping o'chirildi")
+        return
+    health_url = f"{render_url}/health"
+    logger.info(f"💓 Self-ping manzili: {health_url}")
+    while True:
+        try:
+            time.sleep(240)  # 4 daqiqa
+            r = _req.get(health_url, timeout=10)
+            logger.info(f"💓 Self-ping: {r.status_code}")
+        except Exception as e:
+            logger.warning(f"⚠️ Self-ping xatosi: {e}")
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║               🗄️ MA'LUMOTLAR BAZASI                          ║
@@ -3211,6 +3228,11 @@ def main():
     t = threading.Thread(target=run_keep_alive, daemon=True)
     t.start()
     logger.info("🌐 Keep-alive server ishga tushdi!")
+
+    # Self-ping — Render uxlab qolmasligi uchun (UptimeRobot zaxirasi)
+    sp = threading.Thread(target=self_ping, daemon=True)
+    sp.start()
+    logger.info("💓 Self-ping thread ishga tushdi!")
 
     create_database()
 
