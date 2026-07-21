@@ -274,8 +274,8 @@ def backup_data():
     try:
         conn = sqlite3.connect('kino_bot.db')
         cursor = conn.cursor()
-        cursor.execute('SELECT code, title, description, file_id, file_type, category, is_series, added_by FROM movies')
-        movies = [dict(zip(['code','title','description','file_id','file_type','category','is_series','added_by'], r)) for r in cursor.fetchall()]
+        cursor.execute('SELECT code, title, description, file_id, file_type, category, is_series, added_by, is_ongoing, content_type, poster_file_id FROM movies')
+        movies = [dict(zip(['code','title','description','file_id','file_type','category','is_series','added_by','is_ongoing','content_type','poster_file_id'], r)) for r in cursor.fetchall()]
         cursor.execute('SELECT code, episode_num, file_id, file_type FROM series_episodes')
         episodes = [dict(zip(['code','episode_num','file_id','file_type'], r)) for r in cursor.fetchall()]
         cursor.execute('SELECT channel_id, channel_name, channel_url FROM channels')
@@ -325,11 +325,12 @@ def restore_data():
         for m in data.get('movies', []):
             try:
                 cursor.execute('''INSERT OR IGNORE INTO movies
-                    (code, title, description, file_id, file_type, category, is_series, added_by)
-                    VALUES (?,?,?,?,?,?,?,?)''',
+                    (code, title, description, file_id, file_type, category, is_series, added_by, is_ongoing, content_type, poster_file_id)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
                     (m['code'], m['title'], m.get('description',''), m.get('file_id',''),
                      m.get('file_type','video'), m.get('category','Umumiy'),
-                     m.get('is_series',0), m.get('added_by',0)))
+                     m.get('is_series',0), m.get('added_by',0),
+                     m.get('is_ongoing',0), m.get('content_type','anime'), m.get('poster_file_id','')))
                 restored_movies += cursor.rowcount
             except Exception:
                 pass
@@ -545,6 +546,37 @@ def increment_views(code: str):
     cursor.execute('UPDATE movies SET views = views + 1 WHERE code = ?', (code,))
     conn.commit()
     conn.close()
+
+def track_user_watch(user_id: int, movie_code: str):
+    """Foydalanuvchi ko'rgan animeni statistikaga yozish (takrorlanmaydi)"""
+    conn = sqlite3.connect('kino_bot.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT id FROM statistics WHERE user_id=? AND movie_code=? AND action="watch" LIMIT 1',
+        (user_id, movie_code)
+    )
+    if not cursor.fetchone():
+        cursor.execute(
+            'INSERT INTO statistics (user_id, movie_code, action) VALUES (?,?,?)',
+            (user_id, movie_code, 'watch')
+        )
+        conn.commit()
+    conn.close()
+
+def get_user_watched(user_id: int) -> list:
+    """Foydalanuvchi ko'rgan animeler ro'yxati"""
+    conn = sqlite3.connect('kino_bot.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT s.movie_code, COALESCE(m.title, s.movie_code)
+        FROM statistics s
+        LEFT JOIN movies m ON s.movie_code = m.code
+        WHERE s.user_id=? AND s.action="watch"
+        ORDER BY s.action_date DESC
+    ''', (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
 
 def get_popular_movies(limit: int = 10) -> list:
     conn = sqlite3.connect('kino_bot.db')
@@ -819,6 +851,7 @@ def get_main_keyboard_for_user(user_id: int, user_status: str = 'user') -> Reply
         KeyboardButton("📂 Janrlar"),
         KeyboardButton("📞 Bog'lanish")
     )
+    keyboard.add(KeyboardButton("📊 Ko'rganlarim"))
     if is_admin(user_id):
         keyboard.add(KeyboardButton("⚙️ Admin Panel"))
     return keyboard
@@ -1035,6 +1068,7 @@ def send_movie(chat_id: int, movie: dict, user_status: str = 'user'):
                     bot.send_message(chat_id, caption, reply_markup=ep_keyboard)
 
             increment_views(movie['code'])
+            track_user_watch(chat_id, movie['code'])
             logger.info(f"✅ Serial yuborildi: [{movie['code']}] {movie['title']} -> {chat_id}")
         except Exception as e:
             logger.error(f"❌ Serial yuborishda xato: {e}")
@@ -1063,6 +1097,7 @@ def send_movie(chat_id: int, movie: dict, user_status: str = 'user'):
             bot.send_message(chat_id, caption, reply_markup=rating_keyboard)
 
         increment_views(movie['code'])
+        track_user_watch(chat_id, movie['code'])
         logger.info(f"✅ Kino yuborildi: [{movie['code']}] {movie['title']} -> {chat_id}")
     except Exception as e:
         logger.error(f"❌ Kino yuborishda xato: {e}")
@@ -1433,15 +1468,26 @@ def add_movie_command(message):
 def _add_movie_start(message):
     pass
 
+def get_last_movie_code() -> str:
+    """Oxirgi qo'shilgan animening kodini qaytarish"""
+    conn = sqlite3.connect('kino_bot.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT code FROM movies ORDER BY id DESC LIMIT 1')
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
+
 def _start_add_movie_flow(user_id, content_type='anime'):
     set_state(user_id, 'add_movie_code', {'content_type': content_type})
     label = "🎌 Anime bot" if content_type == 'anime' else "🎭 Drama kanal"
+    last_code = get_last_movie_code()
+    last_code_hint = f"\n\n💡 <b>Oxirgi qo'shilgan kod:</b> <code>{last_code}</code>" if last_code else ""
     bot.send_message(
         user_id,
         f"➕ <b>{label} uchun qo'shilmoqda</b>\n\n"
         "❗ Istalgan qadamda <b>orqaga</b> yozing — oldingi bosqichga qaytish\n"
         "❗ Ko'pchilik maydonlar uchun <b>skip</b> yozing — o'tkazib yuborish\n\n"
-        "1️⃣ Kodini kiriting (masalan: <code>101</code>):",
+        f"1️⃣ Kodini kiriting (masalan: <code>101</code>):{last_code_hint}",
         reply_markup=types.ForceReply()
     )
 
@@ -1958,6 +2004,28 @@ def text_handler(message):
         backup_data()
         return
 
+    # Anime nom/tavsif tahrirlash
+    if state.get('state') in ('edit_field_title', 'edit_field_desc') and is_admin(user_id):
+        state_data = state.get('data', {})
+        code = state_data.get('code')
+        field = state.get('state').replace('edit_field_', '')
+        new_val = message.text.strip()
+        if new_val.lower() in ('bekor', 'cancel'):
+            clear_state(user_id)
+            bot.send_message(user_id, "❌ Bekor qilindi.", reply_markup=get_admin_keyboard())
+            return
+        conn = sqlite3.connect('kino_bot.db')
+        if field == 'title':
+            conn.execute("UPDATE movies SET title=? WHERE code=?", (new_val, code))
+        else:
+            conn.execute("UPDATE movies SET description=? WHERE code=?", (new_val, code))
+        conn.commit()
+        conn.close()
+        clear_state(user_id)
+        field_label = "Nom" if field == 'title' else "Tavsif"
+        bot.send_message(user_id, f"✅ <b>{field_label} yangilandi!</b>\n\nKod: <code>{code}</code>\nYangi {field_label.lower()}: <b>{new_val[:200]}</b>", reply_markup=get_admin_keyboard())
+        return
+
     if state.get('state') == 'edit_start_text' and is_admin(user_id):
         new_text = message.text.strip()
         set_setting('start_text', new_text)
@@ -2120,6 +2188,33 @@ def text_handler(message):
         bot.send_message(user_id, contact_text)
         return
 
+    if text == "📊 Ko'rganlarim":
+        watched = get_user_watched(user_id)
+        total = len(watched)
+        if total == 0:
+            bot.send_message(user_id, "📊 Siz hali hech qanday anime ko'rmadingiz.\n\nAnime kodi yuboring yoki qidiring!")
+            return
+        # Har sahifada 15 ta, sahifalash
+        page = 0
+        per_page = 15
+        start = page * per_page
+        chunk = watched[start:start + per_page]
+        lines = []
+        for i, (code, title) in enumerate(chunk, start + 1):
+            lines.append(f"{i}. <b>{title}</b> [<code>{code}</code>]")
+        text_msg = (
+            f"📊 <b>Ko'rgan animeleringiz</b> — jami <b>{total} ta</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n" + "\n".join(lines)
+        )
+        pages = (total + per_page - 1) // per_page
+        if pages > 1:
+            kb = InlineKeyboardMarkup()
+            kb.add(InlineKeyboardButton(f"▶️ Keyingisi (1/{pages})", callback_data=f"watched_page_{user_id}_1"))
+            bot.send_message(user_id, text_msg, reply_markup=kb)
+        else:
+            bot.send_message(user_id, text_msg)
+        return
+
     if text == "⚙️ Admin Panel" and is_admin(user_id):
         admin_panel(message)
         return
@@ -2202,20 +2297,21 @@ def text_handler(message):
         if text == "🔄 Ongoing Boshqarish":
             conn = sqlite3.connect('kino_bot.db', timeout=30)
             cursor = conn.cursor()
-            cursor.execute("SELECT code, title, is_ongoing FROM movies WHERE is_series = 1 AND is_ongoing = 1 ORDER BY added_at DESC")
+            cursor.execute("SELECT code, title, is_ongoing FROM movies WHERE is_series = 1 ORDER BY is_ongoing DESC, added_at DESC")
             serials = cursor.fetchall()
             conn.close()
             if not serials:
-                bot.send_message(user_id, "📭 Hozirda ongoing serial yo'q.")
+                bot.send_message(user_id, "📭 Hech qanday serial qo'shilmagan.")
                 return
             kb = InlineKeyboardMarkup(row_width=1)
-            for code, title, is_ongoing in serials:
-                label = f"🔄 {title[:35]} [{code}]"
+            for code, title, is_ong in serials:
+                icon = "🔄" if is_ong else "✅"
+                label = f"{icon} {title[:33]} [{code}]"
                 kb.add(InlineKeyboardButton(label, callback_data=f"ongoing_toggle_{code}"))
             bot.send_message(
                 user_id,
-                f"🔄 <b>ONGOING SERIALLAR</b> ({len(serials)} ta)\n━━━━━━━━━━━━━━━━━━━━━\n\n"
-                "Serialga bosib yangi qism qo'shing yoki tugallangan qiling:\n\n",
+                f"🔄 <b>ONGOING BOSHQARISH</b> ({len(serials)} ta serial)\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "🔄 = Ongoing  |  ✅ = Tugallangan\n\nSerialga bosing:",
                 reply_markup=kb
             )
             return
@@ -2541,6 +2637,48 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id)
             else:
                 bot.answer_callback_query(call.id, "❌ Kino topilmadi!")
+            return
+
+        # Ko'rganlarim sahifalash
+        if data.startswith("watched_page_"):
+            parts = data.split("_")
+            # watched_page_{user_id}_{page}
+            target_uid = int(parts[2])
+            page = int(parts[3])
+            if target_uid != user_id:
+                bot.answer_callback_query(call.id, "❌ Ruxsat yo'q!")
+                return
+            watched = get_user_watched(user_id)
+            total = len(watched)
+            per_page = 15
+            start = page * per_page
+            chunk = watched[start:start + per_page]
+            if not chunk:
+                bot.answer_callback_query(call.id, "Boshqa sahifa yo'q!")
+                return
+            lines = []
+            for i, (code, title) in enumerate(chunk, start + 1):
+                lines.append(f"{i}. <b>{title}</b> [<code>{code}</code>]")
+            pages = (total + per_page - 1) // per_page
+            text_msg = (
+                f"📊 <b>Ko'rgan animeleringiz</b> — jami <b>{total} ta</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n" + "\n".join(lines)
+            )
+            kb = InlineKeyboardMarkup(row_width=2)
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton("◀️ Oldingi", callback_data=f"watched_page_{user_id}_{page-1}"))
+            if page < pages - 1:
+                nav.append(InlineKeyboardButton("▶️ Keyingisi", callback_data=f"watched_page_{user_id}_{page+1}"))
+            if nav:
+                kb.add(*nav)
+                bot.answer_callback_query(call.id)
+                try:
+                    bot.edit_message_text(text_msg, call.message.chat.id, call.message.message_id, reply_markup=kb)
+                except Exception:
+                    bot.send_message(user_id, text_msg, reply_markup=kb)
+            else:
+                bot.answer_callback_query(call.id)
             return
 
         # Drama janrlar menyusi
@@ -2971,17 +3109,18 @@ def callback_handler(call):
         if data == "ongoing_list" and is_admin(user_id):
             conn = sqlite3.connect('kino_bot.db', timeout=30)
             cursor = conn.cursor()
-            cursor.execute("SELECT code, title, is_ongoing FROM movies WHERE is_series = 1 AND is_ongoing = 1 ORDER BY added_at DESC")
+            cursor.execute("SELECT code, title, is_ongoing FROM movies WHERE is_series = 1 ORDER BY is_ongoing DESC, added_at DESC")
             serials = cursor.fetchall()
             conn.close()
             kb = InlineKeyboardMarkup(row_width=1)
             for sc, st, sio in serials:
-                lb = f"🔄 {st[:35]} [{sc}]"
+                icon = "🔄" if sio else "✅"
+                lb = f"{icon} {st[:33]} [{sc}]"
                 kb.add(InlineKeyboardButton(lb, callback_data=f"ongoing_toggle_{sc}"))
             bot.answer_callback_query(call.id)
             try:
                 bot.edit_message_text(
-                    "🔄 <b>ONGOING BOSHQARISH</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"🔄 <b>ONGOING BOSHQARISH</b> ({len(serials)} ta serial)\n━━━━━━━━━━━━━━━━━━━━━\n\n"
                     "🔄 = Ongoing  |  ✅ = Tugallangan\n\nSerialga bosing:",
                     call.message.chat.id, call.message.message_id, reply_markup=kb
                 )
@@ -3004,6 +3143,7 @@ def callback_handler(call):
             kb = InlineKeyboardMarkup(row_width=1)
             kb.add(InlineKeyboardButton("➕ Yangi qism qo'shish", callback_data=f"ongoing_addepisode_{code}"))
             kb.add(InlineKeyboardButton(toggle_label, callback_data=f"ongoing_setstatus_{code}"))
+            kb.add(InlineKeyboardButton("✏️ Tahrirlash", callback_data=f"edit_anime_{code}"))
             kb.add(InlineKeyboardButton("◀️ Ro'yxatga qaytish", callback_data="ongoing_list"))
             bot.answer_callback_query(call.id)
             try:
@@ -3012,6 +3152,7 @@ def callback_handler(call):
                     f"🔢 Kod: <code>{code}</code>\n"
                     f"📊 Holat: {status}\n"
                     f"🎞 Qismlar: <b>{ep_count} ta</b>\n"
+                    f"📂 Janr: {movie.get('category','—')}\n"
                     f"🖼 Poster: {poster_str}",
                     call.message.chat.id, call.message.message_id, reply_markup=kb
                 )
@@ -3021,6 +3162,94 @@ def callback_handler(call):
                     f"📺 <b>{movie['title']}</b> | {status} | {ep_count} qism",
                     reply_markup=kb
                 )
+            return
+
+        # Animeni tahrirlash menyusi
+        if data.startswith("edit_anime_") and is_admin(user_id):
+            code = data.replace("edit_anime_", "")
+            movie = get_movie(code)
+            if not movie:
+                bot.answer_callback_query(call.id, "❌ Topilmadi!")
+                return
+            kb = InlineKeyboardMarkup(row_width=1)
+            kb.add(InlineKeyboardButton("📝 Nomini o'zgartirish", callback_data=f"editf_title_{code}"))
+            kb.add(InlineKeyboardButton("📄 Tavsifini o'zgartirish", callback_data=f"editf_desc_{code}"))
+            kb.add(InlineKeyboardButton("📂 Janrni o'zgartirish", callback_data=f"editf_cat_{code}"))
+            kb.add(InlineKeyboardButton("◀️ Orqaga", callback_data=f"ongoing_toggle_{code}"))
+            bot.answer_callback_query(call.id)
+            try:
+                bot.edit_message_text(
+                    f"✏️ <b>Tahrirlash: {movie['title']}</b>\n"
+                    f"Kod: <code>{code}</code>\n\nNimani o'zgartirmoqchisiz?",
+                    call.message.chat.id, call.message.message_id, reply_markup=kb
+                )
+            except Exception:
+                pass
+            return
+
+        # Tahrirlash: maydon tanlash
+        if data.startswith("editf_") and is_admin(user_id):
+            parts = data.split("_", 2)
+            field = parts[1]  # title, desc, cat
+            code = parts[2]
+            movie = get_movie(code)
+            if not movie:
+                bot.answer_callback_query(call.id, "❌ Topilmadi!")
+                return
+            field_names = {'title': 'Nom', 'desc': 'Tavsif', 'cat': 'Janr'}
+            field_label = field_names.get(field, field)
+            if field == 'cat':
+                # Janr uchun inline tugmalar
+                kb = InlineKeyboardMarkup(row_width=2)
+                for g in GENRES:
+                    kb.add(InlineKeyboardButton(g, callback_data=f"editcat_{code}_{g}"))
+                kb.add(InlineKeyboardButton("◀️ Bekor", callback_data=f"edit_anime_{code}"))
+                bot.answer_callback_query(call.id)
+                try:
+                    bot.edit_message_text(
+                        f"📂 <b>{movie['title']}</b> uchun yangi janr tanlang:",
+                        call.message.chat.id, call.message.message_id, reply_markup=kb
+                    )
+                except Exception:
+                    pass
+            else:
+                cur_val = movie['title'] if field == 'title' else (movie.get('description') or '—')
+                set_state(user_id, f'edit_field_{field}', {'code': code, 'msg_id': call.message.message_id, 'chat_id': call.message.chat.id})
+                bot.answer_callback_query(call.id)
+                bot.send_message(
+                    user_id,
+                    f"✏️ <b>{field_label}ni o'zgartirish</b>\n"
+                    f"Hozirgi: <i>{cur_val[:200]}</i>\n\n"
+                    f"Yangi {field_label.lower()}ni yozing:",
+                    reply_markup=types.ForceReply()
+                )
+            return
+
+        # Janrni yangilash
+        if data.startswith("editcat_") and is_admin(user_id):
+            parts = data.split("_", 2)
+            code = parts[1]
+            new_cat = parts[2]
+            conn = sqlite3.connect('kino_bot.db')
+            conn.execute("UPDATE movies SET category = ? WHERE code = ?", (new_cat, code))
+            conn.commit()
+            conn.close()
+            bot.answer_callback_query(call.id, f"✅ Janr: {new_cat}")
+            # Tahrirlash sahifasiga qayt
+            movie = get_movie(code)
+            kb = InlineKeyboardMarkup(row_width=1)
+            kb.add(InlineKeyboardButton("📝 Nomini o'zgartirish", callback_data=f"editf_title_{code}"))
+            kb.add(InlineKeyboardButton("📄 Tavsifini o'zgartirish", callback_data=f"editf_desc_{code}"))
+            kb.add(InlineKeyboardButton("📂 Janrni o'zgartirish", callback_data=f"editf_cat_{code}"))
+            kb.add(InlineKeyboardButton("◀️ Orqaga", callback_data=f"ongoing_toggle_{code}"))
+            try:
+                bot.edit_message_text(
+                    f"✏️ <b>Tahrirlash: {movie['title']}</b>\n"
+                    f"Kod: <code>{code}</code>\n✅ Janr yangilandi: <b>{new_cat}</b>",
+                    call.message.chat.id, call.message.message_id, reply_markup=kb
+                )
+            except Exception:
+                pass
             return
 
         # Ongoing holatini toggle
@@ -3043,6 +3272,7 @@ def callback_handler(call):
             kb = InlineKeyboardMarkup(row_width=1)
             kb.add(InlineKeyboardButton("➕ Yangi qism qo'shish", callback_data=f"ongoing_addepisode_{code}"))
             kb.add(InlineKeyboardButton(toggle_label, callback_data=f"ongoing_setstatus_{code}"))
+            kb.add(InlineKeyboardButton("✏️ Tahrirlash", callback_data=f"edit_anime_{code}"))
             kb.add(InlineKeyboardButton("◀️ Ro'yxatga qaytish", callback_data="ongoing_list"))
             try:
                 bot.edit_message_text(
@@ -3050,6 +3280,7 @@ def callback_handler(call):
                     f"🔢 Kod: <code>{code}</code>\n"
                     f"📊 Holat: {status}\n"
                     f"🎞 Qismlar: <b>{ep_count} ta</b>\n"
+                    f"📂 Janr: {movie.get('category','—')}\n"
                     f"🖼 Poster: {poster_str}",
                     call.message.chat.id, call.message.message_id, reply_markup=kb
                 )
