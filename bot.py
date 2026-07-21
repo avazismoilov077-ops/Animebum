@@ -1896,6 +1896,37 @@ def text_handler(message):
         )
         return
 
+    # Ongoing: admin kod kiritganda anime ko'rsatish
+    if state.get('state') == 'ongoing_search' and is_admin(user_id):
+        code = text.strip()
+        movie = get_movie(code)
+        clear_state(user_id)
+        if not movie:
+            bot.send_message(user_id, f"❌ <code>{code}</code> kodli anime topilmadi!\nQayta urinib ko'ring.")
+            return
+        if not movie.get('is_series'):
+            bot.send_message(user_id, f"❌ <code>{code}</code> — bu serial emas, oddiy kino!\nSerial kodini kiriting.")
+            return
+        ep_count = get_series_episodes_count(code)
+        is_ong = movie.get('is_ongoing', 0)
+        status = "🔄 Ongoing" if is_ong else "✅ Tugallangan"
+        toggle_label = "✅ Tugallangan qilish" if is_ong else "🔄 Ongoing qilish"
+        poster_str = "✅ Bor" if movie.get('poster_file_id') else "❌ Yo'q"
+        kb = InlineKeyboardMarkup(row_width=1)
+        kb.add(InlineKeyboardButton(toggle_label, callback_data=f"ongoing_setstatus_{code}"))
+        kb.add(InlineKeyboardButton("✏️ Qismlarni tuzatish", callback_data=f"edit_eps_{code}"))
+        bot.send_message(
+            user_id,
+            f"📺 <b>{movie['title']}</b>\n"
+            f"🔢 Kod: <code>{code}</code>\n"
+            f"📊 Holat: {status}\n"
+            f"🎞 Qismlar: <b>{ep_count} ta</b>\n"
+            f"📂 Janr: {movie.get('category','—')}\n"
+            f"🖼 Poster: {poster_str}",
+            reply_markup=kb
+        )
+        return
+
     if state.get('state') == 'add_episode_code' and is_admin(user_id):
         movie = get_movie(text)
         if not movie:
@@ -2295,24 +2326,13 @@ def text_handler(message):
             bot.send_message(user_id, msg, reply_markup=kb)
             return
         if text == "🔄 Ongoing Boshqarish":
-            conn = sqlite3.connect('kino_bot.db', timeout=30)
-            cursor = conn.cursor()
-            cursor.execute("SELECT code, title, is_ongoing FROM movies WHERE is_series = 1 ORDER BY is_ongoing DESC, added_at DESC")
-            serials = cursor.fetchall()
-            conn.close()
-            if not serials:
-                bot.send_message(user_id, "📭 Hech qanday serial qo'shilmagan.")
-                return
-            kb = InlineKeyboardMarkup(row_width=1)
-            for code, title, is_ong in serials:
-                icon = "🔄" if is_ong else "✅"
-                label = f"{icon} {title[:33]} [{code}]"
-                kb.add(InlineKeyboardButton(label, callback_data=f"ongoing_toggle_{code}"))
+            set_state(user_id, 'ongoing_search')
             bot.send_message(
                 user_id,
-                f"🔄 <b>ONGOING BOSHQARISH</b> ({len(serials)} ta serial)\n━━━━━━━━━━━━━━━━━━━━━\n\n"
-                "🔄 = Ongoing  |  ✅ = Tugallangan\n\nSerialga bosing:",
-                reply_markup=kb
+                "🔄 <b>ONGOING BOSHQARISH</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Serialning kodini kiriting:\n"
+                "Masalan: <code>101</code>",
+                reply_markup=types.ForceReply()
             )
             return
         if text == "💾 Backup":
@@ -3105,154 +3125,7 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id, "❌ Admin topilmadi!")
             return
 
-        # Ongoing ro'yxatiga qaytish
-        if data == "ongoing_list" and is_admin(user_id):
-            conn = sqlite3.connect('kino_bot.db', timeout=30)
-            cursor = conn.cursor()
-            cursor.execute("SELECT code, title, is_ongoing FROM movies WHERE is_series = 1 ORDER BY is_ongoing DESC, added_at DESC")
-            serials = cursor.fetchall()
-            conn.close()
-            kb = InlineKeyboardMarkup(row_width=1)
-            for sc, st, sio in serials:
-                icon = "🔄" if sio else "✅"
-                lb = f"{icon} {st[:33]} [{sc}]"
-                kb.add(InlineKeyboardButton(lb, callback_data=f"ongoing_toggle_{sc}"))
-            bot.answer_callback_query(call.id)
-            try:
-                bot.edit_message_text(
-                    f"🔄 <b>ONGOING BOSHQARISH</b> ({len(serials)} ta serial)\n━━━━━━━━━━━━━━━━━━━━━\n\n"
-                    "🔄 = Ongoing  |  ✅ = Tugallangan\n\nSerialga bosing:",
-                    call.message.chat.id, call.message.message_id, reply_markup=kb
-                )
-            except Exception:
-                pass
-            return
-
-        # Ongoing serial tafsiloti
-        if data.startswith("ongoing_toggle_") and is_admin(user_id):
-            code = data.replace("ongoing_toggle_", "")
-            movie = get_movie(code)
-            if not movie:
-                bot.answer_callback_query(call.id, "❌ Serial topilmadi!")
-                return
-            ep_count = get_series_episodes_count(code)
-            is_ongoing = movie.get('is_ongoing', 0)
-            status = "🔄 Ongoing" if is_ongoing else "✅ Tugallangan"
-            poster_str = "✅ Bor" if movie.get('poster_file_id') else "❌ Yo'q (avval kanalga post qiling)"
-            toggle_label = "✅ Tugallangan qilish" if is_ongoing else "🔄 Ongoing qilish"
-            kb = InlineKeyboardMarkup(row_width=1)
-            kb.add(InlineKeyboardButton("➕ Yangi qism qo'shish", callback_data=f"ongoing_addepisode_{code}"))
-            kb.add(InlineKeyboardButton(toggle_label, callback_data=f"ongoing_setstatus_{code}"))
-            kb.add(InlineKeyboardButton("✏️ Tahrirlash", callback_data=f"edit_anime_{code}"))
-            kb.add(InlineKeyboardButton("◀️ Ro'yxatga qaytish", callback_data="ongoing_list"))
-            bot.answer_callback_query(call.id)
-            try:
-                bot.edit_message_text(
-                    f"📺 <b>{movie['title']}</b>\n"
-                    f"🔢 Kod: <code>{code}</code>\n"
-                    f"📊 Holat: {status}\n"
-                    f"🎞 Qismlar: <b>{ep_count} ta</b>\n"
-                    f"📂 Janr: {movie.get('category','—')}\n"
-                    f"🖼 Poster: {poster_str}",
-                    call.message.chat.id, call.message.message_id, reply_markup=kb
-                )
-            except Exception:
-                bot.send_message(
-                    user_id,
-                    f"📺 <b>{movie['title']}</b> | {status} | {ep_count} qism",
-                    reply_markup=kb
-                )
-            return
-
-        # Animeni tahrirlash menyusi
-        if data.startswith("edit_anime_") and is_admin(user_id):
-            code = data.replace("edit_anime_", "")
-            movie = get_movie(code)
-            if not movie:
-                bot.answer_callback_query(call.id, "❌ Topilmadi!")
-                return
-            kb = InlineKeyboardMarkup(row_width=1)
-            kb.add(InlineKeyboardButton("📝 Nomini o'zgartirish", callback_data=f"editf_title_{code}"))
-            kb.add(InlineKeyboardButton("📄 Tavsifini o'zgartirish", callback_data=f"editf_desc_{code}"))
-            kb.add(InlineKeyboardButton("📂 Janrni o'zgartirish", callback_data=f"editf_cat_{code}"))
-            kb.add(InlineKeyboardButton("◀️ Orqaga", callback_data=f"ongoing_toggle_{code}"))
-            bot.answer_callback_query(call.id)
-            try:
-                bot.edit_message_text(
-                    f"✏️ <b>Tahrirlash: {movie['title']}</b>\n"
-                    f"Kod: <code>{code}</code>\n\nNimani o'zgartirmoqchisiz?",
-                    call.message.chat.id, call.message.message_id, reply_markup=kb
-                )
-            except Exception:
-                pass
-            return
-
-        # Tahrirlash: maydon tanlash
-        if data.startswith("editf_") and is_admin(user_id):
-            parts = data.split("_", 2)
-            field = parts[1]  # title, desc, cat
-            code = parts[2]
-            movie = get_movie(code)
-            if not movie:
-                bot.answer_callback_query(call.id, "❌ Topilmadi!")
-                return
-            field_names = {'title': 'Nom', 'desc': 'Tavsif', 'cat': 'Janr'}
-            field_label = field_names.get(field, field)
-            if field == 'cat':
-                # Janr uchun inline tugmalar
-                kb = InlineKeyboardMarkup(row_width=2)
-                for g in GENRES:
-                    kb.add(InlineKeyboardButton(g, callback_data=f"editcat_{code}_{g}"))
-                kb.add(InlineKeyboardButton("◀️ Bekor", callback_data=f"edit_anime_{code}"))
-                bot.answer_callback_query(call.id)
-                try:
-                    bot.edit_message_text(
-                        f"📂 <b>{movie['title']}</b> uchun yangi janr tanlang:",
-                        call.message.chat.id, call.message.message_id, reply_markup=kb
-                    )
-                except Exception:
-                    pass
-            else:
-                cur_val = movie['title'] if field == 'title' else (movie.get('description') or '—')
-                set_state(user_id, f'edit_field_{field}', {'code': code, 'msg_id': call.message.message_id, 'chat_id': call.message.chat.id})
-                bot.answer_callback_query(call.id)
-                bot.send_message(
-                    user_id,
-                    f"✏️ <b>{field_label}ni o'zgartirish</b>\n"
-                    f"Hozirgi: <i>{cur_val[:200]}</i>\n\n"
-                    f"Yangi {field_label.lower()}ni yozing:",
-                    reply_markup=types.ForceReply()
-                )
-            return
-
-        # Janrni yangilash
-        if data.startswith("editcat_") and is_admin(user_id):
-            parts = data.split("_", 2)
-            code = parts[1]
-            new_cat = parts[2]
-            conn = sqlite3.connect('kino_bot.db')
-            conn.execute("UPDATE movies SET category = ? WHERE code = ?", (new_cat, code))
-            conn.commit()
-            conn.close()
-            bot.answer_callback_query(call.id, f"✅ Janr: {new_cat}")
-            # Tahrirlash sahifasiga qayt
-            movie = get_movie(code)
-            kb = InlineKeyboardMarkup(row_width=1)
-            kb.add(InlineKeyboardButton("📝 Nomini o'zgartirish", callback_data=f"editf_title_{code}"))
-            kb.add(InlineKeyboardButton("📄 Tavsifini o'zgartirish", callback_data=f"editf_desc_{code}"))
-            kb.add(InlineKeyboardButton("📂 Janrni o'zgartirish", callback_data=f"editf_cat_{code}"))
-            kb.add(InlineKeyboardButton("◀️ Orqaga", callback_data=f"ongoing_toggle_{code}"))
-            try:
-                bot.edit_message_text(
-                    f"✏️ <b>Tahrirlash: {movie['title']}</b>\n"
-                    f"Kod: <code>{code}</code>\n✅ Janr yangilandi: <b>{new_cat}</b>",
-                    call.message.chat.id, call.message.message_id, reply_markup=kb
-                )
-            except Exception:
-                pass
-            return
-
-        # Ongoing holatini toggle
+        # ── ONGOING STATUS TOGGLE ──────────────────────────────────
         if data.startswith("ongoing_setstatus_") and is_admin(user_id):
             code = data.replace("ongoing_setstatus_", "")
             movie = get_movie(code)
@@ -3261,19 +3134,15 @@ def callback_handler(call):
                 return
             new_val = 0 if movie.get('is_ongoing') else 1
             set_movie_ongoing(code, new_val)
-            status_text = "🔄 Ongoing qilindi" if new_val else "✅ Tugallangan qilindi"
+            status_text = "🔄 Ongoing qilindi!" if new_val else "✅ Tugallangan qilindi!"
             bot.answer_callback_query(call.id, status_text)
-            # Tafsilot sahifasini yangilash
             ep_count = get_series_episodes_count(code)
-            is_ongoing = new_val
-            status = "🔄 Ongoing" if is_ongoing else "✅ Tugallangan"
-            poster_str = "✅ Bor" if movie.get('poster_file_id') else "❌ Yo'q (avval kanalga post qiling)"
-            toggle_label = "✅ Tugallangan qilish" if is_ongoing else "🔄 Ongoing qilish"
+            status = "🔄 Ongoing" if new_val else "✅ Tugallangan"
+            poster_str = "✅ Bor" if movie.get('poster_file_id') else "❌ Yo'q"
+            toggle_label = "✅ Tugallangan qilish" if new_val else "🔄 Ongoing qilish"
             kb = InlineKeyboardMarkup(row_width=1)
-            kb.add(InlineKeyboardButton("➕ Yangi qism qo'shish", callback_data=f"ongoing_addepisode_{code}"))
             kb.add(InlineKeyboardButton(toggle_label, callback_data=f"ongoing_setstatus_{code}"))
-            kb.add(InlineKeyboardButton("✏️ Tahrirlash", callback_data=f"edit_anime_{code}"))
-            kb.add(InlineKeyboardButton("◀️ Ro'yxatga qaytish", callback_data="ongoing_list"))
+            kb.add(InlineKeyboardButton("✏️ Qismlarni tuzatish", callback_data=f"edit_eps_{code}"))
             try:
                 bot.edit_message_text(
                     f"📺 <b>{movie['title']}</b>\n"
@@ -3288,7 +3157,105 @@ def callback_handler(call):
                 pass
             return
 
-        # Ongoing serialga yangi qism qo'shish (paneldan)
+        # ── QISMLARNI TUZATISH (ko'rish + o'chirish) ──────────────
+        if data.startswith("edit_eps_") and is_admin(user_id):
+            code = data.replace("edit_eps_", "")
+            movie = get_movie(code)
+            if not movie:
+                bot.answer_callback_query(call.id, "❌ Topilmadi!")
+                return
+            episodes = get_series_episodes(code)
+            bot.answer_callback_query(call.id)
+            kb = InlineKeyboardMarkup(row_width=1)
+            if episodes:
+                for ep in episodes:
+                    ep_n = ep['episode_num']
+                    kb.add(InlineKeyboardButton(
+                        f"🗑 {ep_n}-qismni o'chirish",
+                        callback_data=f"delep_{code}_{ep_n}"
+                    ))
+            kb.add(InlineKeyboardButton("➕ Yangi qism qo'shish", callback_data=f"ongoing_addepisode_{code}"))
+            kb.add(InlineKeyboardButton("◀️ Orqaga", callback_data=f"ongoing_back_{code}"))
+            ep_list = "\n".join([f"  {e['episode_num']}-qism" for e in episodes]) if episodes else "  (qism yo'q)"
+            try:
+                bot.edit_message_text(
+                    f"✏️ <b>{movie['title']}</b> — qismlarni tuzatish\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"Mavjud qismlar:\n{ep_list}\n\n"
+                    f"O'chirmoqchi bo'lgan qismga bosing:",
+                    call.message.chat.id, call.message.message_id, reply_markup=kb
+                )
+            except Exception:
+                bot.send_message(user_id,
+                    f"✏️ <b>{movie['title']}</b> — qismlarni tuzatish\n\n"
+                    f"Mavjud qismlar:\n{ep_list}\n\nO'chirmoqchi bo'lgan qismga bosing:",
+                    reply_markup=kb)
+            return
+
+        # ── QISMNI O'CHIRISH ───────────────────────────────────────
+        if data.startswith("delep_") and is_admin(user_id):
+            parts = data.split("_", 2)
+            code = parts[1]
+            ep_num = int(parts[2])
+            conn = sqlite3.connect('kino_bot.db')
+            conn.execute("DELETE FROM series_episodes WHERE code=? AND episode_num=?", (code, ep_num))
+            conn.commit()
+            conn.close()
+            bot.answer_callback_query(call.id, f"✅ {ep_num}-qism o'chirildi!")
+            # Ro'yxatni yangilash
+            movie = get_movie(code)
+            episodes = get_series_episodes(code)
+            kb = InlineKeyboardMarkup(row_width=1)
+            if episodes:
+                for ep in episodes:
+                    en = ep['episode_num']
+                    kb.add(InlineKeyboardButton(f"🗑 {en}-qismni o'chirish", callback_data=f"delep_{code}_{en}"))
+            kb.add(InlineKeyboardButton("➕ Yangi qism qo'shish", callback_data=f"ongoing_addepisode_{code}"))
+            kb.add(InlineKeyboardButton("◀️ Orqaga", callback_data=f"ongoing_back_{code}"))
+            ep_list = "\n".join([f"  {e['episode_num']}-qism" for e in episodes]) if episodes else "  (qism yo'q)"
+            try:
+                bot.edit_message_text(
+                    f"✏️ <b>{movie['title']}</b> — qismlarni tuzatish\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"✅ {ep_num}-qism o'chirildi!\n\n"
+                    f"Qolgan qismlar:\n{ep_list}\n\nO'chirmoqchi bo'lgan qismga bosing:",
+                    call.message.chat.id, call.message.message_id, reply_markup=kb
+                )
+            except Exception:
+                pass
+            return
+
+        # ── ANIME DETAIL SAHIFASIGA QAYTISH ───────────────────────
+        if data.startswith("ongoing_back_") and is_admin(user_id):
+            code = data.replace("ongoing_back_", "")
+            movie = get_movie(code)
+            if not movie:
+                bot.answer_callback_query(call.id, "❌ Topilmadi!")
+                return
+            ep_count = get_series_episodes_count(code)
+            is_ong = movie.get('is_ongoing', 0)
+            status = "🔄 Ongoing" if is_ong else "✅ Tugallangan"
+            poster_str = "✅ Bor" if movie.get('poster_file_id') else "❌ Yo'q"
+            toggle_label = "✅ Tugallangan qilish" if is_ong else "🔄 Ongoing qilish"
+            kb = InlineKeyboardMarkup(row_width=1)
+            kb.add(InlineKeyboardButton(toggle_label, callback_data=f"ongoing_setstatus_{code}"))
+            kb.add(InlineKeyboardButton("✏️ Qismlarni tuzatish", callback_data=f"edit_eps_{code}"))
+            bot.answer_callback_query(call.id)
+            try:
+                bot.edit_message_text(
+                    f"📺 <b>{movie['title']}</b>\n"
+                    f"🔢 Kod: <code>{code}</code>\n"
+                    f"📊 Holat: {status}\n"
+                    f"🎞 Qismlar: <b>{ep_count} ta</b>\n"
+                    f"📂 Janr: {movie.get('category','—')}\n"
+                    f"🖼 Poster: {poster_str}",
+                    call.message.chat.id, call.message.message_id, reply_markup=kb
+                )
+            except Exception:
+                pass
+            return
+
+        # ── ONGOING: YANGI QISM QO'SHISH ──────────────────────────
         if data.startswith("ongoing_addepisode_") and is_admin(user_id):
             code = data.replace("ongoing_addepisode_", "")
             movie = get_movie(code)
