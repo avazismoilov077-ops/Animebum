@@ -734,6 +734,28 @@ def set_movie_ongoing(code: str, is_ongoing: int):
     conn.commit()
     conn.close()
 
+def get_all_ongoing() -> list:
+    """Barcha ongoing seriallar ro'yxatini qaytarish"""
+    conn = sqlite3.connect('kino_bot.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT code, title FROM movies WHERE is_ongoing=1 AND is_series=1 ORDER BY id DESC")
+    rows = cursor.fetchall()
+    conn.close()
+    return [{'code': r[0], 'title': r[1]} for r in rows]
+
+def update_movie_field(code: str, field: str, value) -> bool:
+    """Anime istalgan maydonini yangilash"""
+    allowed = {'title', 'description', 'category', 'is_ongoing'}
+    if field not in allowed:
+        return False
+    conn = sqlite3.connect('kino_bot.db')
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE movies SET {field}=? WHERE code=?", (value, code))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected > 0
+
 def notify_ongoing_new_episode(code: str, title: str, episode_num: int, total: int):
     """Yangi qism chiqqanini barcha foydalanuvchilarga xabar berish (fon oqimida)"""
     import threading
@@ -880,10 +902,13 @@ def get_admin_keyboard() -> ReplyKeyboardMarkup:
     )
     keyboard.add(
         KeyboardButton("🔄 Ongoing Boshqarish"),
-        KeyboardButton("💾 Backup")
+        KeyboardButton("✏️ Anime Tuzatish")
     )
     keyboard.add(
-        KeyboardButton("👥 Adminlar"),
+        KeyboardButton("💾 Backup"),
+        KeyboardButton("👥 Adminlar")
+    )
+    keyboard.add(
         KeyboardButton("🔙 Orqaga")
     )
     return keyboard
@@ -1151,6 +1176,39 @@ def get_state(user_id: int) -> dict:
 
 def clear_state(user_id: int):
     user_states.pop(user_id, None)
+
+def _show_edit_menu(user_id: int, movie: dict):
+    """Anime tahrirlash menyusini ko'rsatish"""
+    code = movie['code']
+    is_ong = movie.get('is_ongoing', 0)
+    ongoing_status = "🔄 Ongoing" if is_ong else "✅ Tugagan"
+    toggle_label = "✅ Tugagan qilish" if is_ong else "🔄 Ongoing qilish"
+    ep_count = get_series_episodes_count(code) if movie.get('is_series') else 0
+    ep_str = f"\n🎞 Qismlar: <b>{ep_count} ta</b>" if movie.get('is_series') else ""
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("✏️ Nomini", callback_data=f"etitle_{code}"),
+        InlineKeyboardButton("📝 Tavsifini", callback_data=f"edesc_{code}")
+    )
+    kb.add(
+        InlineKeyboardButton("📂 Janrini", callback_data=f"egenre_{code}"),
+        InlineKeyboardButton(toggle_label, callback_data=f"eongstat_{code}")
+    )
+    if movie.get('is_series'):
+        kb.add(InlineKeyboardButton("🎞 Qismlarni", callback_data=f"edit_eps_{code}"))
+    kb.add(InlineKeyboardButton("❌ Yopish", callback_data="edit_close"))
+    desc_preview = (movie.get('description') or '')[:150]
+    bot.send_message(
+        user_id,
+        f"✏️ <b>TAHRIRLASH</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📺 <b>{movie['title']}</b>\n"
+        f"🔢 Kod: <code>{code}</code>\n"
+        f"📂 Janr: {movie.get('category', '—')}\n"
+        f"📊 Holat: {ongoing_status}{ep_str}\n\n"
+        + (f"📝 <i>{desc_preview}</i>\n\n" if desc_preview else "") +
+        "Nima tahrirlamoqchisiz?",
+        reply_markup=kb
+    )
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║                  📩 KOMANDALAR                               ║
@@ -1481,7 +1539,13 @@ def _start_add_movie_flow(user_id, content_type='anime'):
     set_state(user_id, 'add_movie_code', {'content_type': content_type})
     label = "🎌 Anime bot" if content_type == 'anime' else "🎭 Drama kanal"
     last_code = get_last_movie_code()
-    last_code_hint = f"\n\n💡 <b>Oxirgi qo'shilgan kod:</b> <code>{last_code}</code>" if last_code else ""
+    if last_code and last_code.isdigit():
+        next_code = str(int(last_code) + 1)
+        last_code_hint = f"\n\n💡 <b>Oxirgi kod:</b> <code>{last_code}</code> → <b>Keyingi tavsiya:</b> <code>{next_code}</code>"
+    elif last_code:
+        last_code_hint = f"\n\n💡 <b>Oxirgi qo'shilgan kod:</b> <code>{last_code}</code>"
+    else:
+        last_code_hint = ""
     bot.send_message(
         user_id,
         f"➕ <b>{label} uchun qo'shilmoqda</b>\n\n"
@@ -2054,7 +2118,38 @@ def text_handler(message):
         conn.close()
         clear_state(user_id)
         field_label = "Nom" if field == 'title' else "Tavsif"
-        bot.send_message(user_id, f"✅ <b>{field_label} yangilandi!</b>\n\nKod: <code>{code}</code>\nYangi {field_label.lower()}: <b>{new_val[:200]}</b>", reply_markup=get_admin_keyboard())
+        bot.send_message(user_id, f"✅ <b>{field_label} yangilandi!</b>\n\nKod: <code>{code}</code>\nYangi {field_label.lower()}: <b>{new_val[:200]}</b>")
+        updated = get_movie(code)
+        if updated:
+            _show_edit_menu(user_id, updated)
+        return
+
+    # Anime tuzatish — kod qidirish
+    if state.get('state') == 'edit_anime_search' and is_admin(user_id):
+        code = text.strip()
+        movie = get_movie(code)
+        clear_state(user_id)
+        if not movie:
+            bot.send_message(user_id, f"❌ <code>{code}</code> kodli anime topilmadi!\nQayta urinib ko'ring.", reply_markup=get_admin_keyboard())
+            return
+        _show_edit_menu(user_id, movie)
+        return
+
+    # Anime tuzatish — janr o'zgartirish (matn orqali)
+    if state.get('state') == 'edit_field_genre' and is_admin(user_id):
+        state_data = state.get('data', {})
+        code = state_data.get('code')
+        new_genre = text.strip()
+        if new_genre.lower() in ('bekor', 'cancel'):
+            clear_state(user_id)
+            bot.send_message(user_id, "❌ Bekor qilindi.", reply_markup=get_admin_keyboard())
+            return
+        update_movie_field(code, 'category', new_genre)
+        clear_state(user_id)
+        bot.send_message(user_id, f"✅ <b>Janr yangilandi!</b>\nYangi janr: <b>{new_genre}</b>")
+        updated = get_movie(code)
+        if updated:
+            _show_edit_menu(user_id, updated)
         return
 
     if state.get('state') == 'edit_start_text' and is_admin(user_id):
@@ -2225,22 +2320,31 @@ def text_handler(message):
         if total == 0:
             bot.send_message(user_id, "📊 Siz hali hech qanday anime ko'rmadingiz.\n\nAnime kodi yuboring yoki qidiring!")
             return
-        # Har sahifada 15 ta, sahifalash
+        # Har sahifada 20 ta, ixcham ko'rinish (2 ta bir qatorda)
         page = 0
-        per_page = 15
+        per_page = 20
         start = page * per_page
         chunk = watched[start:start + per_page]
         lines = []
-        for i, (code, title) in enumerate(chunk, start + 1):
-            lines.append(f"{i}. <b>{title}</b> [<code>{code}</code>]")
+        for i in range(0, len(chunk), 2):
+            left_num = start + i + 1
+            left_title = chunk[i][1][:18]
+            if i + 1 < len(chunk):
+                right_num = start + i + 2
+                right_title = chunk[i + 1][1][:18]
+                lines.append(f"{left_num}. {left_title:<20} {right_num}. {right_title}")
+            else:
+                lines.append(f"{left_num}. {left_title}")
+        pages = (total + per_page - 1) // per_page
         text_msg = (
             f"📊 <b>Ko'rgan animeleringiz</b> — jami <b>{total} ta</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━\n\n" + "\n".join(lines)
+            f"📄 Sahifa 1/{pages}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"<code>" + "\n".join(lines) + "</code>"
         )
-        pages = (total + per_page - 1) // per_page
         if pages > 1:
             kb = InlineKeyboardMarkup()
-            kb.add(InlineKeyboardButton(f"▶️ Keyingisi (1/{pages})", callback_data=f"watched_page_{user_id}_1"))
+            kb.add(InlineKeyboardButton(f"▶️ Keyingisi (2/{pages})", callback_data=f"watched_page_{user_id}_1"))
             bot.send_message(user_id, text_msg, reply_markup=kb)
         else:
             bot.send_message(user_id, text_msg)
@@ -2326,11 +2430,34 @@ def text_handler(message):
             bot.send_message(user_id, msg, reply_markup=kb)
             return
         if text == "🔄 Ongoing Boshqarish":
-            set_state(user_id, 'ongoing_search')
+            ongoing_list = get_all_ongoing()
+            kb = InlineKeyboardMarkup(row_width=1)
+            for item in ongoing_list[:20]:
+                kb.add(InlineKeyboardButton(
+                    f"🔄 {item['title'][:40]}",
+                    callback_data=f"ong_pick_{item['code']}"
+                ))
+            kb.add(InlineKeyboardButton("🔍 Kod bilan qidirish", callback_data="ong_search_by_code"))
+            if ongoing_list:
+                msg = (
+                    f"🔄 <b>ONGOING BOSHQARISH</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"📋 Hozirgi ongoing seriallar: <b>{len(ongoing_list)} ta</b>\n\n"
+                    "Birini tanlang yoki kod bilan qidiring:"
+                )
+            else:
+                msg = (
+                    "🔄 <b>ONGOING BOSHQARISH</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    "📭 Hozircha hech qanday ongoing serial yo'q.\n\n"
+                    "Kod bilan qidiring:"
+                )
+            bot.send_message(user_id, msg, reply_markup=kb)
+            return
+        if text == "✏️ Anime Tuzatish":
+            set_state(user_id, 'edit_anime_search')
             bot.send_message(
                 user_id,
-                "🔄 <b>ONGOING BOSHQARISH</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
-                "Serialning kodini kiriting:\n"
+                "✏️ <b>ANIME TUZATISH</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Tahrirlash uchun anime kodini kiriting:\n"
                 "Masalan: <code>101</code>",
                 reply_markup=types.ForceReply()
             )
@@ -2576,6 +2703,93 @@ def callback_handler(call):
     data = call.data
 
     try:
+        # ── ONGOING RO'YXATIDAN TANLASH ───────────────────────────
+        if data.startswith("ong_pick_") and is_admin(user_id):
+            code = data.replace("ong_pick_", "")
+            movie = get_movie(code)
+            bot.answer_callback_query(call.id)
+            if not movie:
+                bot.send_message(user_id, f"❌ <code>{code}</code> topilmadi!")
+                return
+            ep_count = get_series_episodes_count(code)
+            is_ong = movie.get('is_ongoing', 0)
+            status = "🔄 Ongoing" if is_ong else "✅ Tugallangan"
+            toggle_label = "✅ Tugallangan qilish" if is_ong else "🔄 Ongoing qilish"
+            poster_str = "✅ Bor" if movie.get('poster_file_id') else "❌ Yo'q"
+            kb = InlineKeyboardMarkup(row_width=1)
+            kb.add(InlineKeyboardButton(toggle_label, callback_data=f"ongoing_setstatus_{code}"))
+            kb.add(InlineKeyboardButton("✏️ Qismlarni tuzatish", callback_data=f"edit_eps_{code}"))
+            bot.send_message(
+                user_id,
+                f"📺 <b>{movie['title']}</b>\n"
+                f"🔢 Kod: <code>{code}</code>\n"
+                f"📊 Holat: {status}\n"
+                f"🎞 Qismlar: <b>{ep_count} ta</b>\n"
+                f"📂 Janr: {movie.get('category','—')}\n"
+                f"🖼 Poster: {poster_str}",
+                reply_markup=kb
+            )
+            return
+
+        if data == "ong_search_by_code" and is_admin(user_id):
+            set_state(user_id, 'ongoing_search')
+            bot.answer_callback_query(call.id)
+            bot.send_message(
+                user_id,
+                "🔍 Serialning kodini kiriting:\nMasalan: <code>101</code>",
+                reply_markup=types.ForceReply()
+            )
+            return
+
+        # ── ANIME TUZATISH CALLBACKLARI ───────────────────────────
+        if data.startswith("etitle_") and is_admin(user_id):
+            code = data.replace("etitle_", "")
+            set_state(user_id, 'edit_field_title', {'code': code})
+            bot.answer_callback_query(call.id)
+            bot.send_message(user_id, f"✏️ <code>{code}</code> uchun yangi <b>nomini</b> kiriting:\n(<code>bekor</code> — bekor qilish)", reply_markup=types.ForceReply())
+            return
+
+        if data.startswith("edesc_") and is_admin(user_id):
+            code = data.replace("edesc_", "")
+            set_state(user_id, 'edit_field_desc', {'code': code})
+            bot.answer_callback_query(call.id)
+            bot.send_message(user_id, f"📝 <code>{code}</code> uchun yangi <b>tavsifini</b> kiriting:\n(<code>bekor</code> — bekor qilish)", reply_markup=types.ForceReply())
+            return
+
+        if data.startswith("egenre_") and is_admin(user_id):
+            code = data.replace("egenre_", "")
+            set_state(user_id, 'edit_field_genre', {'code': code})
+            bot.answer_callback_query(call.id)
+            genre_selections[user_id] = []
+            keyboard = build_genre_keyboard(user_id)
+            bot.send_message(
+                user_id,
+                f"📂 <code>{code}</code> uchun yangi <b>janrini</b> tanlang:\n"
+                "✅ Tugyor tugmasini bosing yoki janr nomini yozing:",
+                reply_markup=keyboard
+            )
+            return
+
+        if data.startswith("eongstat_") and is_admin(user_id):
+            code = data.replace("eongstat_", "")
+            movie = get_movie(code)
+            if movie:
+                new_val = 0 if movie.get('is_ongoing') else 1
+                update_movie_field(code, 'is_ongoing', new_val)
+                status_text = "🔄 Ongoing qilindi!" if new_val else "✅ Tugagan qilindi!"
+                bot.answer_callback_query(call.id, status_text)
+                updated = get_movie(code)
+                if updated:
+                    _show_edit_menu(user_id, updated)
+            else:
+                bot.answer_callback_query(call.id, "❌ Topilmadi!")
+            return
+
+        if data == "edit_close":
+            bot.answer_callback_query(call.id, "✅ Yopildi")
+            bot.send_message(user_id, "✅ Tahrirlash yopildi.", reply_markup=get_admin_keyboard())
+            return
+
         # Obuna tekshirish
         if data == "check_subscription":
             is_subscribed, not_subscribed = check_subscription(user_id)
@@ -2670,19 +2884,28 @@ def callback_handler(call):
                 return
             watched = get_user_watched(user_id)
             total = len(watched)
-            per_page = 15
+            per_page = 20
             start = page * per_page
             chunk = watched[start:start + per_page]
             if not chunk:
                 bot.answer_callback_query(call.id, "Boshqa sahifa yo'q!")
                 return
             lines = []
-            for i, (code, title) in enumerate(chunk, start + 1):
-                lines.append(f"{i}. <b>{title}</b> [<code>{code}</code>]")
+            for i in range(0, len(chunk), 2):
+                left_num = start + i + 1
+                left_title = chunk[i][1][:18]
+                if i + 1 < len(chunk):
+                    right_num = start + i + 2
+                    right_title = chunk[i + 1][1][:18]
+                    lines.append(f"{left_num}. {left_title:<20} {right_num}. {right_title}")
+                else:
+                    lines.append(f"{left_num}. {left_title}")
             pages = (total + per_page - 1) // per_page
             text_msg = (
                 f"📊 <b>Ko'rgan animeleringiz</b> — jami <b>{total} ta</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━\n\n" + "\n".join(lines)
+                f"📄 Sahifa {page+1}/{pages}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"<code>" + "\n".join(lines) + "</code>"
             )
             kb = InlineKeyboardMarkup(row_width=2)
             nav = []
@@ -2694,7 +2917,7 @@ def callback_handler(call):
                 kb.add(*nav)
                 bot.answer_callback_query(call.id)
                 try:
-                    bot.edit_message_text(text_msg, call.message.chat.id, call.message.message_id, reply_markup=kb)
+                    bot.edit_message_text(text_msg, call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode='HTML')
                 except Exception:
                     bot.send_message(user_id, text_msg, reply_markup=kb)
             else:
@@ -2792,7 +3015,7 @@ def callback_handler(call):
         if data.startswith("admin_cat_") and is_admin(user_id):
             genre = data.replace("admin_cat_", "")
             state = get_state(user_id)
-            if state.get('state') == 'add_movie_category':
+            if state.get('state') in ('add_movie_category', 'edit_field_genre'):
                 if user_id not in genre_selections:
                     genre_selections[user_id] = []
                 selected = genre_selections[user_id]
@@ -2817,6 +3040,22 @@ def callback_handler(call):
         # Admin — janr tanlovini tasdiqlash
         if data == "admin_genre_done" and is_admin(user_id):
             state = get_state(user_id)
+            if state.get('state') == 'edit_field_genre':
+                selected = genre_selections.get(user_id, [])
+                if not selected:
+                    bot.answer_callback_query(call.id, "⚠️ Kamida bitta janr tanlang!")
+                    return
+                code = state.get('data', {}).get('code')
+                category_str = ", ".join(selected)
+                update_movie_field(code, 'category', category_str)
+                genre_selections.pop(user_id, None)
+                clear_state(user_id)
+                bot.answer_callback_query(call.id, f"✅ Janr yangilandi!")
+                bot.send_message(user_id, f"✅ <b>Janr yangilandi:</b> {category_str}")
+                updated = get_movie(code)
+                if updated:
+                    _show_edit_menu(user_id, updated)
+                return
             if state.get('state') == 'add_movie_category':
                 selected = genre_selections.get(user_id, [])
                 if not selected:
