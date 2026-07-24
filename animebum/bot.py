@@ -960,6 +960,9 @@ def get_admin_keyboard() -> ReplyKeyboardMarkup:
         KeyboardButton("✏️ Anime Tuzatish")
     )
     keyboard.add(
+        KeyboardButton("⚙️ Post Kanal Sozlash")
+    )
+    keyboard.add(
         KeyboardButton("💳 Danat Sozlash"),
         KeyboardButton("📢 Reklama Sozlash")
     )
@@ -2237,6 +2240,19 @@ def text_handler(message):
         )
         return
 
+    if state.get('state') == 'set_post_channel' and is_admin(user_id):
+        ch_id = text.strip()
+        set_setting('post_channel_id', ch_id)
+        clear_state(user_id)
+        bot.send_message(
+            user_id,
+            f"✅ <b>Post kanali saqlandi!</b>\n\n"
+            f"Kanal: <code>{ch_id}</code>\n\n"
+            "Endi har yangi qism qo'shilganda shu kanalga avtomatik post ketadi! 🎉",
+            reply_markup=get_admin_keyboard()
+        )
+        return
+
     if state.get('state') == 'edit_donat_text' and is_admin(user_id):
         new_text = message.text.strip()
         set_setting('donat_text', new_text)
@@ -2531,6 +2547,19 @@ def text_handler(message):
             return
         if text == "📣 Broadcast":
             broadcast_command(message)
+            return
+        if text == "⚙️ Post Kanal Sozlash":
+            cur = get_setting('post_channel_id') or "Belgilanmagan"
+            set_state(user_id, 'set_post_channel')
+            bot.send_message(
+                user_id,
+                f"📢 <b>POST KANAL SOZLASH</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"Hozirgi kanal: <code>{cur}</code>\n\n"
+                "Yangi kanal username yoki ID kiriting:\n"
+                "Masalan: <code>@animebum_1</code> yoki <code>-1001234567890</code>\n\n"
+                "⚠️ Botni o'sha kanalga <b>admin</b> qilib qo'shing!",
+                reply_markup=types.ForceReply()
+            )
             return
         if text == "📡 Kanal Sozlash":
             show_channels_menu(user_id)
