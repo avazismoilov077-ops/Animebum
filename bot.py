@@ -594,6 +594,53 @@ def get_latest_movies(limit: int = 10) -> list:
     conn.close()
     return movies
 
+def get_random_anime() -> Optional[dict]:
+    """Tasodifiy anime qaytarish"""
+    conn = sqlite3.connect('kino_bot.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT code, title, description, file_id, file_type, category, is_series, views, '
+        'rating_sum, rating_count, added_by, added_at, is_ongoing, content_type, poster_file_id '
+        'FROM movies WHERE content_type="anime" ORDER BY RANDOM() LIMIT 1'
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    keys = ['code','title','description','file_id','file_type','category','is_series','views',
+            'rating_sum','rating_count','added_by','added_at','is_ongoing','content_type','poster_file_id']
+    return dict(zip(keys, row))
+
+def get_user_full_stats(user_id: int) -> dict:
+    """Foydalanuvchining to'liq statistikasi"""
+    conn = sqlite3.connect('kino_bot.db')
+    cursor = conn.cursor()
+    # Ko'rgan animlar soni
+    cursor.execute('SELECT COUNT(*) FROM statistics WHERE user_id=? AND action="watch"', (user_id,))
+    watched_count = cursor.fetchone()[0]
+    # Berilgan baholar soni
+    cursor.execute('SELECT COUNT(*), AVG(rating) FROM ratings WHERE user_id=?', (user_id,))
+    row = cursor.fetchone()
+    rated_count = row[0] or 0
+    avg_rating = round(row[1], 1) if row[1] else 0
+    # Sevimli janr (eng ko'p ko'rilgan janr)
+    cursor.execute('''
+        SELECT m.category, COUNT(*) as cnt
+        FROM statistics s
+        JOIN movies m ON s.movie_code = m.code
+        WHERE s.user_id=? AND s.action="watch" AND m.category IS NOT NULL AND m.category != ""
+        GROUP BY m.category ORDER BY cnt DESC LIMIT 1
+    ''', (user_id,))
+    fav_row = cursor.fetchone()
+    fav_genre = fav_row[0] if fav_row else "—"
+    conn.close()
+    return {
+        'watched': watched_count,
+        'rated': rated_count,
+        'avg_rating': avg_rating,
+        'fav_genre': fav_genre
+    }
+
 def get_movies_by_category(category: str) -> list:
     """Janr bo'yicha qidirish — faqat anime (drama kanal emas)"""
     conn = sqlite3.connect('kino_bot.db')
@@ -871,9 +918,17 @@ def get_main_keyboard_for_user(user_id: int, user_status: str = 'user') -> Reply
     )
     keyboard.add(
         KeyboardButton("📂 Janrlar"),
-        KeyboardButton("📞 Bog'lanish")
+        KeyboardButton("🎲 Random Anime")
     )
-    keyboard.add(KeyboardButton("📊 Ko'rganlarim"))
+    keyboard.add(
+        KeyboardButton("📊 Statistikam"),
+        KeyboardButton("📊 Ko'rganlarim")
+    )
+    keyboard.add(
+        KeyboardButton("💳 Danat"),
+        KeyboardButton("📢 Reklama")
+    )
+    keyboard.add(KeyboardButton("📞 Bog'lanish"))
     if is_admin(user_id):
         keyboard.add(KeyboardButton("⚙️ Admin Panel"))
     return keyboard
@@ -903,6 +958,10 @@ def get_admin_keyboard() -> ReplyKeyboardMarkup:
     keyboard.add(
         KeyboardButton("🔄 Ongoing Boshqarish"),
         KeyboardButton("✏️ Anime Tuzatish")
+    )
+    keyboard.add(
+        KeyboardButton("💳 Danat Sozlash"),
+        KeyboardButton("📢 Reklama Sozlash")
     )
     keyboard.add(
         KeyboardButton("💾 Backup"),
@@ -2177,6 +2236,30 @@ def text_handler(message):
         )
         return
 
+    if state.get('state') == 'edit_donat_text' and is_admin(user_id):
+        new_text = message.text.strip()
+        set_setting('donat_text', new_text)
+        clear_state(user_id)
+        bot.send_message(
+            user_id,
+            f"✅ <b>Danat matni saqlandi!</b>\n\n"
+            f"📋 <b>Ko'rinishi:</b>\n{new_text}",
+            reply_markup=get_admin_keyboard()
+        )
+        return
+
+    if state.get('state') == 'edit_reklama_text' and is_admin(user_id):
+        new_text = message.text.strip()
+        set_setting('reklama_text', new_text)
+        clear_state(user_id)
+        bot.send_message(
+            user_id,
+            f"✅ <b>Reklama matni saqlandi!</b>\n\n"
+            f"📋 <b>Ko'rinishi:</b>\n{new_text}",
+            reply_markup=get_admin_keyboard()
+        )
+        return
+
     if state.get('state') == 'add_series_count' and is_admin(user_id):
         if not text.isdigit() or int(text) < 1:
             bot.send_message(user_id, "❌ To'g'ri raqam kiriting!")
@@ -2300,6 +2383,72 @@ def text_handler(message):
     if text == "📂 Janrlar":
         keyboard = get_category_keyboard()
         bot.send_message(user_id, "📂 <b>JANRLAR</b>\n\nQuyidagi janrlardan birini tanlang:", reply_markup=keyboard)
+        return
+
+    if text == "🎲 Random Anime":
+        anime = get_random_anime()
+        if not anime:
+            bot.send_message(user_id, "😕 Hozircha anime yo'q. Keyinroq urinib ko'ring!")
+            return
+        send_movie(user_id, anime, user_status)
+        return
+
+    if text == "📊 Statistikam":
+        stats = get_user_full_stats(user_id)
+        stars = "⭐" * int(stats['avg_rating']) if stats['avg_rating'] else "—"
+        bot.send_message(
+            user_id,
+            f"📊 <b>MENING STATISTIKAM</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🎬 Ko'rgan anime: <b>{stats['watched']} ta</b>\n"
+            f"⭐ Baholagan: <b>{stats['rated']} ta</b>\n"
+            f"💫 O'rtacha baho: <b>{stats['avg_rating']}</b> {stars}\n"
+            f"❤️ Sevimli janr: <b>{stats['fav_genre']}</b>\n\n"
+            f"📋 Ko'rganlar ro'yxati uchun — <b>Ko'rganlarim</b> tugmasini bosing"
+        )
+        return
+
+    if text == "💳 Danat":
+        default_donat = (
+            "💳 <b>DANAT</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "AnimeBum botini qo'llab-quvvatlash uchun rahmat! 🙏\n\n"
+            "To'lov ma'lumotlari admin tomonidan tez orada qo'shiladi."
+        )
+        donat_text = get_setting('donat_text') or default_donat
+        bot.send_message(user_id, donat_text)
+        return
+
+    if text == "📢 Reklama":
+        default_reklama = (
+            "📢 <b>REKLAMA</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Botda reklama joylashtirish uchun admin bilan bog'laning:\n\n"
+            "👤 @animebum_1"
+        )
+        reklama_text = get_setting('reklama_text') or default_reklama
+        bot.send_message(user_id, reklama_text)
+        return
+
+    if text == "💳 Danat Sozlash" and is_admin(user_id):
+        cur = get_setting('donat_text') or "Hali o'rnatilmagan"
+        set_state(user_id, 'edit_donat_text')
+        bot.send_message(
+            user_id,
+            f"💳 <b>DANAT MATNI</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📋 Hozirgi matn:\n{cur}\n\n"
+            "Yangi matnni kiriting (karta raqam, Click/Payme havola va h.k.):",
+            reply_markup=types.ForceReply()
+        )
+        return
+
+    if text == "📢 Reklama Sozlash" and is_admin(user_id):
+        cur = get_setting('reklama_text') or "Hali o'rnatilmagan"
+        set_state(user_id, 'edit_reklama_text')
+        bot.send_message(
+            user_id,
+            f"📢 <b>REKLAMA MATNI</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📋 Hozirgi matn:\n{cur}\n\n"
+            "Yangi matnni kiriting (narx, kontakt va h.k.):",
+            reply_markup=types.ForceReply()
+        )
         return
 
     if text == "📞 Bog'lanish":
