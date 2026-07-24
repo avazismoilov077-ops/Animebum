@@ -815,7 +815,7 @@ def notify_ongoing_new_episode(code: str, title: str, episode_num: int, total: i
             f"🔔 <b>Yangi qism chiqdi!</b>\n\n"
             f"📺 <b>{title}</b>\n"
             f"▶️ <b>{episode_num}-qism</b> qo'shildi!\n"
-            f"🎞 Jami: <b>{total} qism</b>\n\n"
+            f"🎞 Qism: <b>{total}/? (Davom etmoqda)</b>\n\n"
             f"👇 Ko'rish uchun bosing!"
         )
         for uid in users:
@@ -1119,15 +1119,16 @@ def send_movie(chat_id: int, movie: dict, user_status: str = 'user'):
             return
 
         ongoing_badge = " 🔄" if movie.get('is_ongoing') else ""
-        ongoing_line = "🔄 <b>Holati:</b> Davom etmoqda\n" if movie.get('is_ongoing') else ""
         poster_id = movie.get('poster_file_id') or ''
 
-        ongoing_status = "🟢 Davom etmoqda" if movie.get('is_ongoing') else "🔴 Tugagan"
+        is_ong = movie.get('is_ongoing')
+        ongoing_status = "🟢 Davom etmoqda" if is_ong else "🔴 Tugagan"
+        qism_str = f"{total}/? (Davom etmoqda)" if is_ong else f"{total} ta"
         caption = (
             f"🎌 <b>{movie['title']}{ongoing_badge}</b>\n\n"
             f"┌{'─'*21}\n"
             f"│ 📂 <b>Janr:</b> {movie['category']}\n"
-            f"│ 🎞 <b>Qismlar:</b> {total} ta\n"
+            f"│ 🎞 <b>Qismlar:</b> {qism_str}\n"
             f"│ 📌 <b>Holat:</b> {ongoing_status}\n"
             f"│ 🔢 <b>Kod:</b> <code>{movie['code']}</code>\n"
             f"└{'─'*21}\n\n"
@@ -2812,14 +2813,11 @@ def file_handler(message):
         )
         if is_ongoing:
             notify_ongoing_new_episode(code, title, ep_num, total_now)
-            # Kanalga eski poster bilan avtomatik post
+            # Kanalga avtomatik post (poster bo'lsa rasмли, bo'lmasa matнли)
             post_ch = get_setting('post_channel_id')
             if post_ch and movie_check:
                 try:
-                    if poster_id:
-                        _send_post_to_channel_ongoing(movie_check, post_ch, ep_num, total_now)
-                    else:
-                        bot.send_message(user_id, "⚠️ Poster yo'q — kanalga post chiqarilmadi. Avval kanalga post qiling (rasm bilan).")
+                    _send_post_to_channel_ongoing(movie_check, post_ch, ep_num, total_now)
                 except Exception as pe:
                     logger.error(f"Auto post xatosi: {pe}")
         backup_data()
@@ -3678,14 +3676,12 @@ def callback_handler(call):
 # ╚══════════════════════════════════════════════════════════════╝
 
 def _send_post_to_channel_ongoing(movie: dict, channel: str, episode_num: int, total: int):
-    """Ongoing serialga yangi qism qo'shilganda kanalga eski poster bilan avtomatik post"""
+    """Ongoing serialga yangi qism qo'shilganda kanalga avtomatik post (poster bo'lsa rasмli, bo'lmasa matнли)"""
     try:
         bot_info = bot.get_me()
         bot_username = bot_info.username
         code = movie['code']
         poster_id = movie.get('poster_file_id') or ''
-        if not poster_id:
-            return
         deep_link = f"https://t.me/{bot_username}?start=movie_{code}"
         keyboard = InlineKeyboardMarkup()
         keyboard.add(InlineKeyboardButton("▶️ Ko'rish / Watch", url=deep_link))
@@ -3693,10 +3689,13 @@ def _send_post_to_channel_ongoing(movie: dict, channel: str, episode_num: int, t
             f"🔔 <b>Yangi qism chiqdi!</b>\n\n"
             f"🎌 <b>{movie['title']}</b>\n\n"
             f"▶️ <b>{episode_num}-qism</b> qo'shildi!\n"
-            f"🎞 Jami: <b>{total} qism</b>\n\n"
+            f"🎞 Qism: <b>{total}/? (Davom etmoqda)</b>\n\n"
             f"👇 Ko'rish uchun bosing!"
         )
-        bot.send_photo(channel, photo=poster_id, caption=caption, reply_markup=keyboard)
+        if poster_id:
+            bot.send_photo(channel, photo=poster_id, caption=caption, reply_markup=keyboard)
+        else:
+            bot.send_message(channel, caption, reply_markup=keyboard)
     except Exception as e:
         logger.error(f"_send_post_to_channel_ongoing xatosi: {e}")
 
