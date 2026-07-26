@@ -1689,25 +1689,14 @@ def post_channel_command(message):
     parts = message.text.split()
     code = parts[1].strip() if len(parts) >= 2 else None
 
-    # Agar ikki kanal ham bor — avval qaysi kanalga so'ra
-    if anime_ch and drama_ch:
-        kb = InlineKeyboardMarkup(row_width=1)
-        kb.add(InlineKeyboardButton(f"📺 Anime kanali ({anime_ch})", callback_data="postchan_anime"))
-        kb.add(InlineKeyboardButton(f"🎭 Drama kanali ({drama_ch})", callback_data="postchan_drama"))
-        if code:
-            set_state(user_id, 'post_channel_select_pending', {'code': code})
-        bot.send_message(user_id, "📢 <b>Qaysi kanalga post qilasiz?</b>", reply_markup=kb)
-        return
-
-    # Faqat bitta kanal bor — to'g'ri davom et
-    post_ch = anime_ch or drama_ch
-    label = "📺 Anime kanali" if anime_ch else "🎭 Drama kanali"
-
+    # Kanal so'ramasdan — kod so'raymiz, keyin content_type dan avtomatik aniqlaymiz
     if not code:
-        set_state(user_id, 'post_channel_ask_code', {'channel': post_ch, 'channel_label': label})
+        set_state(user_id, 'post_channel_ask_code', {})
         bot.send_message(user_id,
-            f"📢 Kanal: {label} (<code>{post_ch}</code>)\n\n"
-            f"Qaysi anime/serial kodini post qilmoqchisiz?\nKodini kiriting:")
+            "📢 <b>Kanalga Post</b>\n\n"
+            "Qaysi anime/serial kodini post qilmoqchisiz?\n"
+            "Kodini kiriting (masalan: <code>101</code>):",
+            reply_markup=types.ForceReply())
         return
 
     movie = get_movie(code)
@@ -2095,9 +2084,18 @@ def text_handler(message):
         if not movie:
             bot.send_message(user_id, f"❌ <code>{code}</code> kodli anime topilmadi!\nQayta kiriting:")
             return
-        state_data = state.get('data') or {}
-        post_ch = state_data.get('channel') or get_setting('post_channel_id')
-        label = state_data.get('channel_label', '📢 Kanal')
+        # content_type dan avtomatik kanal aniqlaymiz
+        content_type = movie.get('content_type', 'anime')
+        if content_type == 'drama':
+            post_ch = get_setting('post_channel_drama_id')
+            label = "🎭 Drama kanali"
+        else:
+            post_ch = get_setting('post_channel_id')
+            label = "📺 Anime kanali"
+        # Agar tegishli kanal sozlanmagan bo'lsa, mavjud kanaldan foydalanamiz
+        if not post_ch:
+            post_ch = get_setting('post_channel_id') or get_setting('post_channel_drama_id')
+            label = "📢 Kanal"
         if not post_ch:
             clear_state(user_id)
             bot.send_message(user_id, "⚠️ Post kanali hali sozlanmagan!\n/setpostchannel @animebum_1")
@@ -2106,7 +2104,7 @@ def text_handler(message):
         bot.send_message(
             user_id,
             f"🎌 <b>{movie['title']}</b>\n"
-            f"📢 Kanal: {label}\n\n"
+            f"📢 Kanal: {label} (<code>{post_ch}</code>)\n\n"
             f"📸 Post uchun <b>RASM</b> yuboring:\n"
             f"(yoki <code>skip</code> yozing — rasmsiz post yuborish)"
         )
@@ -2573,15 +2571,14 @@ def text_handler(message):
             if not anime_ch and not drama_ch:
                 bot.send_message(user_id,
                     "⚠️ Hali hech qanday post kanali sozlanmagan!\n\n"
-                    "/setpostchannel @animebum_1 — Anime kanali\n"
-                    "/setdramachannel @drama_kanal — Drama kanali")
+                    "Admin paneldan: ⚙️ Post Kanal Sozlash")
                 return
-            kb = InlineKeyboardMarkup(row_width=1)
-            if anime_ch:
-                kb.add(InlineKeyboardButton(f"📺 Anime kanali ({anime_ch})", callback_data="postchan_anime"))
-            if drama_ch:
-                kb.add(InlineKeyboardButton(f"🎭 Drama kanali ({drama_ch})", callback_data="postchan_drama"))
-            bot.send_message(user_id, "📢 <b>Qaysi kanalga post qilasiz?</b>", reply_markup=kb)
+            set_state(user_id, 'post_channel_ask_code', {})
+            bot.send_message(user_id,
+                "📢 <b>Kanalga Post</b>\n\n"
+                "Anime/serial kodini kiriting — kanal avtomatik aniqlanadi:\n"
+                "(Anime → anime kanal, Drama → drama kanal)",
+                reply_markup=types.ForceReply())
             return
         if text == "👥 Adminlar":
             if not is_super_admin(user_id):
@@ -2842,8 +2839,12 @@ def file_handler(message):
         )
         if is_ongoing:
             notify_ongoing_new_episode(code, title, ep_num, total_now)
-            # Kanalga avtomatik post (poster bo'lsa rasмли, bo'lmasa matнли)
-            post_ch = get_setting('post_channel_id')
+            # content_type dan to'g'ri kanal tanlanadi
+            ctype = movie_check.get('content_type', 'anime') if movie_check else 'anime'
+            if ctype == 'drama':
+                post_ch = get_setting('post_channel_drama_id') or get_setting('post_channel_id')
+            else:
+                post_ch = get_setting('post_channel_id') or get_setting('post_channel_drama_id')
             if post_ch and movie_check:
                 try:
                     _send_post_to_channel_ongoing(movie_check, post_ch, ep_num, total_now)
@@ -3743,11 +3744,13 @@ def _send_post_to_channel(admin_id: int, movie: dict, channel: str, photo_file_i
         cat = movie.get('category', '')
         if movie.get('is_series'):
             ep_count = get_series_episodes_count(code)
+            is_ong = movie.get('is_ongoing')
+            qism_str = f"{ep_count}/? (Davom etmoqda)" if is_ong else f"{ep_count} ta"
             caption = (
                 f"🎌 <b>{movie['title']}</b>\n\n"
                 + (f"📝 {desc}\n" if desc else "")
                 + (f"📂 Janr: {cat}\n" if cat else "")
-                + f"🎞 Qismlar: <b>{ep_count} ta</b>\n\n"
+                + f"🎞 Qismlar: <b>{qism_str}</b>\n\n"
                 f"👇 Ko'rish uchun bosing!"
             )
         else:
