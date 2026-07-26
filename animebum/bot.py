@@ -1029,23 +1029,33 @@ def get_episodes_keyboard(code: str, total_episodes: int, viewer_id: int = None,
 
 def show_channels_menu(user_id: int):
     channels = get_channels()
+    anime_ch = get_setting('post_channel_id') or "❌ Belgilanmagan"
+    drama_ch = get_setting('post_channel_drama_id') or "❌ Belgilanmagan"
     keyboard = InlineKeyboardMarkup(row_width=1)
+
+    text = "📡 <b>KANAL SOZLAMALARI</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+
+    # Post kanallar
+    text += (
+        "📢 <b>Post Kanallar:</b>\n"
+        f"  📺 Anime: <code>{anime_ch}</code>\n"
+        f"  🎭 Drama: <code>{drama_ch}</code>\n\n"
+    )
+    keyboard.add(InlineKeyboardButton("📺 Anime Post Kanal O'zgartirish", callback_data="set_anime_post_ch"))
+    keyboard.add(InlineKeyboardButton("🎭 Drama Post Kanal O'zgartirish", callback_data="set_drama_post_ch"))
+
+    # Majburiy obuna kanallar
+    text += "🔒 <b>Majburiy Obuna Kanallar:</b>\n"
     if not channels:
-        text = (
-            "📡 <b>MAJBURIY KANALLAR</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "ℹ️ Hozircha hech qanday kanal qo'shilmagan.\n\n"
-            "➕ <b>Yangi kanal qo'shish</b> tugmasini bosing:"
-        )
+        text += "  ℹ️ Hozircha hech qanday kanal yo'q\n"
     else:
-        text = "📡 <b>MAJBURIY KANALLAR</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
         for i, ch in enumerate(channels, 1):
-            text += f"{i}. {ch['name']}\n   🆔 <code>{ch['id']}</code>\n   🔗 {ch['url']}\n\n"
+            text += f"  {i}. {ch['name']} — <code>{ch['id']}</code>\n"
             keyboard.add(InlineKeyboardButton(
                 f"🗑️ O'chirish: {ch['name']}",
                 callback_data=f"chremove_{ch['id']}"
             ))
-    keyboard.add(InlineKeyboardButton("➕ Yangi Kanal Qo'shish", callback_data="chadd_start"))
+    keyboard.add(InlineKeyboardButton("➕ Majburiy Kanal Qo'shish", callback_data="chadd_start"))
     bot.send_message(user_id, text, reply_markup=keyboard)
 
 def get_category_keyboard() -> InlineKeyboardMarkup:
@@ -2242,13 +2252,28 @@ def text_handler(message):
         ch_id = text.strip()
         set_setting('post_channel_id', ch_id)
         clear_state(user_id)
-        bot.send_message(
-            user_id,
-            f"✅ <b>Post kanali saqlandi!</b>\n\n"
-            f"Kanal: <code>{ch_id}</code>\n\n"
-            "Endi har yangi qism qo'shilganda shu kanalga avtomatik post ketadi! 🎉",
-            reply_markup=get_admin_keyboard()
-        )
+        bot.send_message(user_id,
+            f"✅ <b>Anime post kanali saqlandi!</b>\nKanal: <code>{ch_id}</code>",
+            reply_markup=get_admin_keyboard())
+        show_channels_menu(user_id)
+        return
+
+    if state.get('state') == 'set_anime_post_channel' and is_admin(user_id):
+        ch_id = text.strip()
+        set_setting('post_channel_id', ch_id)
+        clear_state(user_id)
+        bot.send_message(user_id,
+            f"✅ <b>Anime post kanali saqlandi!</b>\nKanal: <code>{ch_id}</code>")
+        show_channels_menu(user_id)
+        return
+
+    if state.get('state') == 'set_drama_post_channel' and is_admin(user_id):
+        ch_id = text.strip()
+        set_setting('post_channel_drama_id', ch_id)
+        clear_state(user_id)
+        bot.send_message(user_id,
+            f"✅ <b>Drama post kanali saqlandi!</b>\nKanal: <code>{ch_id}</code>")
+        show_channels_menu(user_id)
         return
 
     if state.get('state') == 'edit_donat_text' and is_admin(user_id):
@@ -3416,6 +3441,30 @@ def callback_handler(call):
         if data == "referral_info":
             referral_command(call.message)
             bot.answer_callback_query(call.id)
+            return
+
+        if data == "set_anime_post_ch" and is_admin(user_id):
+            bot.answer_callback_query(call.id)
+            cur = get_setting('post_channel_id') or "Belgilanmagan"
+            set_state(user_id, 'set_anime_post_channel')
+            bot.send_message(user_id,
+                f"📺 <b>Anime Post Kanal</b>\n\nHozirgi: <code>{cur}</code>\n\n"
+                "Yangi kanal username yoki ID kiriting:\n"
+                "Masalan: <code>@animebum_1</code>\n\n"
+                "⚠️ Botni kanalga <b>admin</b> qilib qo'shing!",
+                reply_markup=types.ForceReply())
+            return
+
+        if data == "set_drama_post_ch" and is_admin(user_id):
+            bot.answer_callback_query(call.id)
+            cur = get_setting('post_channel_drama_id') or "Belgilanmagan"
+            set_state(user_id, 'set_drama_post_channel')
+            bot.send_message(user_id,
+                f"🎭 <b>Drama Post Kanal</b>\n\nHozirgi: <code>{cur}</code>\n\n"
+                "Yangi kanal username yoki ID kiriting:\n"
+                "Masalan: <code>@drama_kanal</code>\n\n"
+                "⚠️ Botni kanalga <b>admin</b> qilib qo'shing!",
+                reply_markup=types.ForceReply())
             return
 
         if data == "chadd_start" and is_admin(user_id):
