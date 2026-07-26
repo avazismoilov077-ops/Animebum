@@ -884,12 +884,20 @@ def check_subscription(user_id: int) -> tuple:
         # Instagram va boshqa tashqi platformalar tekshirilmaydi
         if channel.get('type', 'telegram') != 'telegram':
             continue
+        ch_id = channel['id']
+        # Invite link (t.me/+xxxx) yoki @+xxxx shaklida saqlangan bo'lsa — tekshirib bo'lmaydi
+        if '+' in str(ch_id):
+            logger.warning(
+                f"⚠️ '{ch_id}' — bu invite link, raqamli ID emas. "
+                "Admin eski kanalni o'chirib, raqamli ID bilan qayta qo'shishi kerak."
+            )
+            continue  # bu kanalga nisbatan tekshirishni o'tkazib yubor
         try:
-            member = bot.get_chat_member(channel['id'], user_id)
+            member = bot.get_chat_member(ch_id, user_id)
             if member.status in ['left', 'kicked']:
                 not_subscribed.append(channel)
         except Exception as e:
-            logger.error(f"Kanal tekshirishda xato ({channel['id']}): {e}")
+            logger.error(f"Kanal tekshirishda xato ({ch_id}): {e}")
             not_subscribed.append(channel)
     return len(not_subscribed) == 0, not_subscribed
 
