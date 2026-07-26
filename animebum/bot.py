@@ -1928,6 +1928,49 @@ def stats_command(message):
 # ║            📨 XABAR HANDLERLARI (HOLATLAR)                   ║
 # ╚══════════════════════════════════════════════════════════════╝
 
+@bot.message_handler(func=lambda m: getattr(m, 'forward_from_chat', None) is not None
+                                    and getattr(m.forward_from_chat, 'type', '') == 'channel')
+def forwarded_channel_handler(message):
+    """Kanaldan forward qilingan xabar — kanal ID va nomini avtomatik aniqlaydi."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        return
+    state = get_state(user_id)
+    st = state.get('state', '')
+    if st not in ('add_tg_link', 'add_tg_private_id'):
+        return
+
+    chat = message.forward_from_chat
+    ch_id = str(chat.id)           # masalan: -1001234567890
+    ch_title = chat.title or "Kanal"
+    # URL: agar username bo'lsa ochiq havola, bo'lmasa t.me/c/<id>
+    if chat.username:
+        ch_url = f"https://t.me/{chat.username}"
+        ch_id_saved = f"@{chat.username}"
+    else:
+        ch_url = f"https://t.me/c/{ch_id.lstrip('-100').lstrip('-')}"
+        ch_id_saved = ch_id
+
+    # Invite link saqlangan bo'lsa (maxfiy kanal) URLni o'sha bilan almashtir
+    data = state.get('data', {})
+    if data.get('channel_url') and '+' in data['channel_url']:
+        ch_url = data['channel_url']
+
+    success = add_channel(ch_id_saved, ch_title, ch_url, user_id, 'telegram')
+    clear_state(user_id)
+    if success:
+        bot.send_message(
+            user_id,
+            f"✅ <b>Kanal avtomatik qo'shildi!</b>\n\n"
+            f"📢 {ch_title}\n"
+            f"🆔 <code>{ch_id_saved}</code>\n"
+            f"🔗 {ch_url}",
+        )
+    else:
+        bot.send_message(user_id, f"❌ Bu kanal allaqachon qo'shilgan!\n🆔 <code>{ch_id_saved}</code>")
+    show_channels_menu(user_id)
+
+
 @bot.message_handler(content_types=['text'])
 def text_handler(message):
     user_id = message.from_user.id
