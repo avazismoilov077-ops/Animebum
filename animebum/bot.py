@@ -2524,41 +2524,6 @@ def text_handler(message):
         show_channels_menu(user_id)
         return
 
-    # ───── ESKI FLOW (backward compat) ─────
-    if state.get('state') == 'add_channel_id' and is_admin(user_id):
-        ch_id = text.strip()
-        if ch_id.startswith('http://') or ch_id.startswith('https://'):
-            ch_id = ch_id.rstrip('/').split('/')[-1]
-        ch_id = ch_id.lstrip('@')
-        if not ch_id.startswith('-'):
-            ch_id = '@' + ch_id
-        set_state(user_id, 'add_channel_name', {'channel_id': ch_id})
-        bot.send_message(user_id, f"✅ Kanal ID: <code>{ch_id}</code>\n\n2️⃣ Kanal nomini kiriting:")
-        return
-
-    if state.get('state') == 'add_channel_name' and is_admin(user_id):
-        data = state.get('data', {})
-        data['channel_name'] = text.strip()
-        set_state(user_id, 'add_channel_url', data)
-        bot.send_message(user_id, f"✅ Nomi: <b>{text}</b>\n\n3️⃣ Kanal havolasini kiriting:")
-        return
-
-    if state.get('state') == 'add_channel_url' and is_admin(user_id):
-        data = state.get('data', {})
-        ch_url = text.strip()
-        if not ch_url.startswith('http'):
-            ch_url = 'https://t.me/' + ch_url.lstrip('@')
-        success = add_channel(data['channel_id'], data['channel_name'], ch_url, user_id)
-        clear_state(user_id)
-        if success:
-            bot.send_message(
-                user_id,
-                f"✅ <b>Kanal qo'shildi!</b>\n\n🆔 <code>{data['channel_id']}</code>\n📢 {data['channel_name']}\n🔗 {ch_url}"
-            )
-            show_channels_menu(user_id)
-        else:
-            bot.send_message(user_id, f"❌ Bu kanal allaqachon qo'shilgan!")
-        return
 
     if state.get('state') == 'set_status_id' and is_admin(user_id):
         try:
