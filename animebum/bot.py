@@ -1356,8 +1356,10 @@ def start_handler(message):
             except Exception:
                 pass
 
-    is_subscribed, not_subscribed = check_subscription(user_id)
-    if not is_subscribed:
+    # Admin obuna tekshiruvidan o'tadi
+    if not is_admin(user_id):
+     is_subscribed, not_subscribed = check_subscription(user_id)
+     if not is_subscribed:
         keyboard = get_subscription_keyboard(not_subscribed)
         # Deep link bo'lsa obuna tekshirilgandan keyin shu kinoni yuborsin
         if deep_link_code:
@@ -1980,16 +1982,18 @@ def text_handler(message):
         bot.send_message(user_id, "⚠️ <b>Spam aniqlandi!</b>\n\nSiz juda ko'p xabar yubordingiz. Iltimos, 1 daqiqa kuting.")
         return
 
-    is_subscribed, not_subscribed = check_subscription(user_id)
-    if not is_subscribed:
-        keyboard = get_subscription_keyboard(not_subscribed)
-        bot.send_message(
-            user_id,
-            "⚠️ <b>Obuna bo'lmadingiz!</b>\n\n"
-            "Botdan foydalanish uchun avval quyidagi kanallarga obuna bo'ling:",
-            reply_markup=keyboard
-        )
-        return
+    # Admin obuna tekshiruvidan o'tadi
+    if not is_admin(user_id):
+        is_subscribed, not_subscribed = check_subscription(user_id)
+        if not is_subscribed:
+            keyboard = get_subscription_keyboard(not_subscribed)
+            bot.send_message(
+                user_id,
+                "⚠️ <b>Obuna bo'lmadingiz!</b>\n\n"
+                "Botdan foydalanish uchun avval quyidagi kanallarga obuna bo'ling:",
+                reply_markup=keyboard
+            )
+            return
 
     user = get_user(user_id)
     if not user:
