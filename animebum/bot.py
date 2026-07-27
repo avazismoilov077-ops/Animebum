@@ -1361,22 +1361,22 @@ def start_handler(message):
 
     # Admin obuna tekshiruvidan o'tadi
     if not is_admin(user_id):
-     is_subscribed, not_subscribed = check_subscription(user_id)
-     if not is_subscribed:
-        keyboard = get_subscription_keyboard(not_subscribed)
-        # Deep link bo'lsa obuna tekshirilgandan keyin shu kinoni yuborsin
-        if deep_link_code:
-            set_state(user_id, 'pending_movie', {'code': deep_link_code})
-        bot.send_message(
-            user_id,
-            f"👋 Salom, <b>{full_name}</b>!\n\n"
-            f"🎌 <b>ANIMEBUM</b>ga xush kelibsiz!\n\n"
-            f"⚠️ Botdan foydalanish uchun quyidagi kanallarga obuna bo'lishingiz shart:\n\n"
-            + "\n".join([f"➡️ {ch['name']}" for ch in not_subscribed]) +
-            f"\n\n✅ Obuna bo'lgandan so'ng <b>Tekshirish</b> tugmasini bosing.",
-            reply_markup=keyboard
-        )
-        return
+        is_subscribed, not_subscribed = check_subscription(user_id)
+        if not is_subscribed:
+            keyboard = get_subscription_keyboard(not_subscribed)
+            # Deep link bo'lsa obuna tekshirilgandan keyin shu kinoni yuborsin
+            if deep_link_code:
+                set_state(user_id, 'pending_movie', {'code': deep_link_code})
+            bot.send_message(
+                user_id,
+                f"👋 Salom, <b>{full_name}</b>!\n\n"
+                f"🎌 <b>ANIMEBUM</b>ga xush kelibsiz!\n\n"
+                f"⚠️ Botdan foydalanish uchun quyidagi kanallarga obuna bo'lishingiz shart:\n\n"
+                + "\n".join([f"➡️ {ch['name']}" for ch in not_subscribed]) +
+                f"\n\n✅ Obuna bo'lgandan so'ng <b>Tekshirish</b> tugmasini bosing.",
+                reply_markup=keyboard
+            )
+            return
 
     user_status = user.get('status', 'user')
     keyboard = get_main_keyboard_for_user(user_id, user_status)
