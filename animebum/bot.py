@@ -876,6 +876,9 @@ def claim_daily_bonus(user_id: int) -> tuple:
 # ╚══════════════════════════════════════════════════════════════╝
 
 def check_subscription(user_id: int) -> tuple:
+    # Admin va super-admin hech qachon bloklanmaydi
+    if user_id in ADMIN_IDS:
+        return True, []
     channels = get_channels()
     if not channels:
         return True, []
