@@ -2006,6 +2006,20 @@ def text_handler(message):
     user_status = user.get('status', 'user')
     state = get_state(user_id)
 
+    # ── ADMIN KLAVIATURA TUGMALARI — har doim state'dan ustun ────
+    # Admin klaviatura tugmasini bossa, joriy state bekor bo'ladi
+    ADMIN_KEYBOARD_TEXTS = {
+        "➕ Anime Qo'shish", "🗑️ Anime O'chirish", "➕ Qism Qo'shish",
+        "📢 Kanalga Post", "📊 Statistika", "👥 Foydalanuvchilar",
+        "📡 Kanal Sozlash", "📣 Broadcast", "✏️ Start Matni",
+        "✏️ Bog'lanish Matni", "🔄 Ongoing Boshqarish", "✏️ Anime Tuzatish",
+        "⚙️ Post Kanal Sozlash", "💳 Danat Sozlash", "📢 Reklama Sozlash",
+        "💾 Backup", "👥 Adminlar", "🔙 Orqaga", "⚙️ Admin Panel",
+    }
+    if is_admin(user_id) and text in ADMIN_KEYBOARD_TEXTS and state.get('state'):
+        clear_state(user_id)
+        state = {}   # keyingi handlerlarga bo'sh state ketsin
+
     # ── HOLATLAR ─────────────────────────────────────────────────
 
     if state.get('state') == 'searching':
