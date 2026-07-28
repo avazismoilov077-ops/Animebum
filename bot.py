@@ -239,6 +239,17 @@ def create_database():
         conn.commit()
     except Exception:
         pass
+
+    # Join request larni saqlash jadvali (yopiq kanal uchun)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS join_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            channel_id TEXT NOT NULL,
+            requested_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, channel_id)
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -400,6 +411,33 @@ def remove_channel(channel_id: str) -> bool:
     affected = cursor.rowcount
     conn.close()
     return affected > 0
+
+def save_join_request(user_id: int, channel_id: str):
+    """Foydalanuvchining qo'shilish so'rovini saqlash"""
+    conn = sqlite3.connect('kino_bot.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            'INSERT OR IGNORE INTO join_requests (user_id, channel_id) VALUES (?, ?)',
+            (user_id, channel_id)
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+def has_join_request(user_id: int, channel_id: str) -> bool:
+    """Foydalanuvchi shu kanalga so'rov yuborgan yoki yo'q"""
+    conn = sqlite3.connect('kino_bot.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT 1 FROM join_requests WHERE user_id=? AND channel_id=?',
+        (user_id, channel_id)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result is not None
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║               👤 FOYDALANUVCHI FUNKSIYALARI                  ║
@@ -880,15 +918,23 @@ def check_subscription(user_id: int) -> tuple:
         return True, []
     not_subscribed = []
     for channel in channels:
+        ch_type = channel.get('type', 'public')
         # Instagram kanallarni tekshirmaymiz — faqat ko'rsatamiz
-        if channel.get('type') == 'instagram':
+        if ch_type == 'instagram':
             continue
+        # Yopiq kanal: a'zolikni YOKI qo'shilish so'rovini tekshiramiz
+        if ch_type == 'private':
+            if has_join_request(user_id, channel['id']):
+                continue  # So'rov yuborgan — o'tkazib yuboramiz ✅
         try:
             member = bot.get_chat_member(channel['id'], user_id)
             if member.status in ['left', 'kicked']:
                 not_subscribed.append(channel)
         except Exception as e:
             logger.error(f"Kanal tekshirishda xato ({channel['id']}): {e}")
+            # Yopiq kanalda xato bo'lsa va so'rov bo'lsa — o'tkazib yuboramiz
+            if ch_type == 'private' and has_join_request(user_id, channel['id']):
+                continue
             not_subscribed.append(channel)
     return len(not_subscribed) == 0, not_subscribed
 
@@ -3982,6 +4028,18 @@ def main():
         except Exception as e:
             logger.error(f"⚠️ Bot xatosi: {e}. 5 soniyadan keyin qayta urinib ko'rilmoqda...")
             time.sleep(5)
+
+@bot.chat_join_request_handler()
+def handle_join_request(update):
+    """Yopiq kanalga qo'shilish so'rovini saqlash"""
+    try:
+        user_id = update.from_user.id
+        channel_id = str(update.chat.id)
+        save_join_request(user_id, channel_id)
+        logger.info(f"📥 Join request saqlandi: user={user_id}, channel={channel_id}")
+    except Exception as e:
+        logger.error(f"Join request saqlashda xato: {e}")
+
 
 if __name__ == '__main__':
     main()
