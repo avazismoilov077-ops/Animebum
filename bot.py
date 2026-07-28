@@ -228,11 +228,17 @@ def create_database():
             channel_id TEXT UNIQUE NOT NULL,
             channel_name TEXT NOT NULL,
             channel_url TEXT NOT NULL,
+            channel_type TEXT DEFAULT 'public',
             added_by INTEGER,
             added_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-
+    # Eski DB ga channel_type ustunini qo'shish (migration)
+    try:
+        conn.execute('ALTER TABLE channels ADD COLUMN channel_type TEXT DEFAULT "public"')
+        conn.commit()
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -345,8 +351,8 @@ def restore_data():
 
         for ch in data.get('channels', []):
             try:
-                cursor.execute('INSERT OR IGNORE INTO channels (channel_id, channel_name, channel_url) VALUES (?,?,?)',
-                               (ch['channel_id'], ch['channel_name'], ch['channel_url']))
+                cursor.execute('INSERT OR IGNORE INTO channels (channel_id, channel_name, channel_url, channel_type) VALUES (?,?,?,?)',
+                               (ch['channel_id'], ch['channel_name'], ch['channel_url'], ch.get('channel_type', 'public')))
             except Exception:
                 pass
 
@@ -365,21 +371,21 @@ def restore_data():
 def get_channels() -> list:
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT channel_id, channel_name, channel_url FROM channels')
+    cursor.execute('SELECT channel_id, channel_name, channel_url, COALESCE(channel_type,"public") FROM channels')
     rows = cursor.fetchall()
     conn.close()
-    return [{"id": r[0], "name": r[1], "url": r[2]} for r in rows]
+    return [{"id": r[0], "name": r[1], "url": r[2], "type": r[3]} for r in rows]
 
-def add_channel(channel_id: str, channel_name: str, channel_url: str, added_by: int) -> bool:
+def add_channel(channel_id: str, channel_name: str, channel_url: str, added_by: int, channel_type: str = 'public') -> bool:
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
     try:
         cursor.execute(
-            'INSERT INTO channels (channel_id, channel_name, channel_url, added_by) VALUES (?, ?, ?, ?)',
-            (channel_id, channel_name, channel_url, added_by)
+            'INSERT INTO channels (channel_id, channel_name, channel_url, channel_type, added_by) VALUES (?, ?, ?, ?, ?)',
+            (channel_id, channel_name, channel_url, channel_type, added_by)
         )
         conn.commit()
-        logger.info(f"✅ Yangi kanal qo'shildi: {channel_id}")
+        logger.info(f"✅ Yangi kanal qo'shildi: {channel_id} ({channel_type})")
         return True
     except sqlite3.IntegrityError:
         return False
@@ -874,6 +880,9 @@ def check_subscription(user_id: int) -> tuple:
         return True, []
     not_subscribed = []
     for channel in channels:
+        # Instagram kanallarni tekshirmaymiz — faqat ko'rsatamiz
+        if channel.get('type') == 'instagram':
+            continue
         try:
             member = bot.get_chat_member(channel['id'], user_id)
             if member.status in ['left', 'kicked']:
@@ -973,11 +982,27 @@ def get_admin_keyboard() -> ReplyKeyboardMarkup:
     return keyboard
 
 def get_subscription_keyboard(channels: list) -> InlineKeyboardMarkup:
+    """Obuna bo'lish uchun kanal tugmalari (barcha turlar ko'rsatiladi)"""
     keyboard = InlineKeyboardMarkup(row_width=1)
+    all_channels = get_channels()
+    # Avval tekshirilmaydigan kanallar (Instagram) ham ko'rsatiladi
+    shown_ids = {ch['id'] for ch in channels}
+    instagram_channels = [ch for ch in all_channels if ch.get('type') == 'instagram']
+    
     for channel in channels:
+        ch_type = channel.get('type', 'public')
+        if ch_type == 'private':
+            icon = "🔐"
+        else:
+            icon = "📢"
         keyboard.add(InlineKeyboardButton(
-            f"📢 {channel['name']}",
+            f"{icon} {channel['name']}",
             url=channel['url']
+        ))
+    for ch in instagram_channels:
+        keyboard.add(InlineKeyboardButton(
+            f"📸 {ch['name']} (Instagram)",
+            url=ch['url']
         ))
     keyboard.add(InlineKeyboardButton("✅ Tekshirish", callback_data="check_subscription"))
     return keyboard
@@ -1027,6 +1052,8 @@ def get_episodes_keyboard(code: str, total_episodes: int, viewer_id: int = None,
 def show_channels_menu(user_id: int):
     channels = get_channels()
     keyboard = InlineKeyboardMarkup(row_width=1)
+    type_icons = {'public': '📢', 'private': '🔐', 'instagram': '📸'}
+    type_labels = {'public': 'Ochiq kanal/guruh', 'private': 'Yopiq kanal', 'instagram': 'Instagram'}
     if not channels:
         text = (
             "📡 <b>MAJBURIY KANALLAR</b>\n"
@@ -1037,7 +1064,10 @@ def show_channels_menu(user_id: int):
     else:
         text = "📡 <b>MAJBURIY KANALLAR</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
         for i, ch in enumerate(channels, 1):
-            text += f"{i}. {ch['name']}\n   🆔 <code>{ch['id']}</code>\n   🔗 {ch['url']}\n\n"
+            ch_type = ch.get('type', 'public')
+            icon = type_icons.get(ch_type, '📢')
+            label = type_labels.get(ch_type, 'Ochiq')
+            text += f"{i}. {icon} <b>{ch['name']}</b>\n   📌 Tur: {label}\n   🆔 <code>{ch['id']}</code>\n   🔗 {ch['url']}\n\n"
             keyboard.add(InlineKeyboardButton(
                 f"🗑️ O'chirish: {ch['name']}",
                 callback_data=f"chremove_{ch['id']}"
@@ -2293,38 +2323,83 @@ def text_handler(message):
         return
 
     if state.get('state') == 'add_channel_id' and is_admin(user_id):
-        ch_id = text.strip()
-        if ch_id.startswith('http://') or ch_id.startswith('https://'):
-            ch_id = ch_id.rstrip('/').split('/')[-1]
-        ch_id = ch_id.lstrip('@')
-        if not ch_id.startswith('-'):
-            ch_id = '@' + ch_id
-        set_state(user_id, 'add_channel_name', {'channel_id': ch_id})
-        bot.send_message(user_id, f"✅ Kanal ID: <code>{ch_id}</code>\n\n2️⃣ Kanal nomini kiriting (masalan: <b>📢 Asosiy Kanal</b>):")
+        ch_type = state.get('data', {}).get('channel_type', 'public')
+        raw = text.strip()
+
+        if ch_type == 'instagram':
+            # Instagram uchun: username yoki to'liq URL qabul qilamiz
+            if raw.startswith('http://') or raw.startswith('https://'):
+                username = raw.rstrip('/').split('/')[-1].lstrip('@')
+            else:
+                username = raw.lstrip('@')
+            ch_id = f"instagram_{username}"
+            ch_url = f"https://www.instagram.com/{username}/"
+            set_state(user_id, 'add_channel_name', {'channel_id': ch_id, 'channel_url': ch_url, 'channel_type': 'instagram'})
+            bot.send_message(user_id, f"📸 Instagram: <code>@{username}</code>\n🔗 {ch_url}\n\n2️⃣ Sahifa nomini kiriting (masalan: <b>📸 AnimeBum Instagram</b>):")
+
+        elif ch_type == 'private':
+            # Yopiq kanal uchun faqat chat_id (-100...) qabul qilamiz
+            ch_id = raw if raw.startswith('-') else raw
+            set_state(user_id, 'add_channel_name', {'channel_id': ch_id, 'channel_type': 'private'})
+            bot.send_message(user_id, f"🔐 Chat ID: <code>{ch_id}</code>\n\n2️⃣ Kanal nomini kiriting (masalan: <b>🔐 VIP Kanal</b>):")
+
+        else:
+            # Ochiq kanal/guruh
+            if raw.startswith('http://') or raw.startswith('https://'):
+                raw = raw.rstrip('/').split('/')[-1]
+            ch_id = raw.lstrip('@')
+            if not ch_id.startswith('-'):
+                ch_id = '@' + ch_id
+            set_state(user_id, 'add_channel_name', {'channel_id': ch_id, 'channel_type': 'public'})
+            bot.send_message(user_id, f"📢 Kanal ID: <code>{ch_id}</code>\n\n2️⃣ Kanal nomini kiriting (masalan: <b>📢 Asosiy Kanal</b>):")
         return
 
     if state.get('state') == 'add_channel_name' and is_admin(user_id):
         data = state.get('data', {})
         data['channel_name'] = text.strip()
-        set_state(user_id, 'add_channel_url', data)
-        bot.send_message(user_id, f"✅ Nomi: <b>{text}</b>\n\n3️⃣ Kanal havolasini kiriting (masalan: <code>https://t.me/kanal</code>):")
+        ch_type = data.get('channel_type', 'public')
+        # Instagram uchun URL allaqachon tayyor
+        if ch_type == 'instagram':
+            set_state(user_id, 'add_channel_name_done', data)
+            ch_url = data.get('channel_url', '')
+            success = add_channel(data['channel_id'], data['channel_name'], ch_url, user_id, ch_type)
+            clear_state(user_id)
+            if success:
+                bot.send_message(user_id, f"✅ <b>Instagram qo'shildi!</b>\n\n📸 {data['channel_name']}\n🔗 {ch_url}\n\nℹ️ Foydalanuvchilarga ko'rsatiladi, lekin obuna tekshirilmaydi.")
+                show_channels_menu(user_id)
+            else:
+                bot.send_message(user_id, "❌ Bu Instagram allaqachon qo'shilgan!")
+        elif ch_type == 'private':
+            # Yopiq kanal uchun havola so'raymiz
+            set_state(user_id, 'add_channel_url', data)
+            bot.send_message(user_id, f"✅ Nomi: <b>{text}</b>\n\n3️⃣ Kanalning taklif havolasini kiriting:\n(masalan: <code>https://t.me/+ABCdef123456</code>)")
+        else:
+            set_state(user_id, 'add_channel_url', data)
+            bot.send_message(user_id, f"✅ Nomi: <b>{text}</b>\n\n3️⃣ Kanal havolasini kiriting (masalan: <code>https://t.me/kanal</code>):")
         return
 
     if state.get('state') == 'add_channel_url' and is_admin(user_id):
         data = state.get('data', {})
+        ch_type = data.get('channel_type', 'public')
         ch_url = text.strip()
         if not ch_url.startswith('http'):
-            ch_url = 'https://t.me/' + ch_url.lstrip('@')
-        success = add_channel(data['channel_id'], data['channel_name'], ch_url, user_id)
+            if ch_type == 'private':
+                ch_url = 'https://t.me/+' + ch_url.lstrip('+')
+            else:
+                ch_url = 'https://t.me/' + ch_url.lstrip('@')
+        success = add_channel(data['channel_id'], data['channel_name'], ch_url, user_id, ch_type)
         clear_state(user_id)
+        type_icons = {'public': '📢', 'private': '🔐', 'instagram': '📸'}
+        icon = type_icons.get(ch_type, '📢')
         if success:
+            note = "\n\n⚠️ Botni shu kanalga admin qilib qo'shing!" if ch_type != 'instagram' else ""
             bot.send_message(
                 user_id,
-                f"✅ <b>Kanal qo'shildi!</b>\n\n🆔 <code>{data['channel_id']}</code>\n📢 {data['channel_name']}\n🔗 {ch_url}\n\n⚠️ Botni shu kanalga admin qilib qo'shing!"
+                f"✅ <b>Kanal qo'shildi!</b>\n\n{icon} {data['channel_name']}\n🆔 <code>{data['channel_id']}</code>\n🔗 {ch_url}{note}"
             )
             show_channels_menu(user_id)
         else:
-            bot.send_message(user_id, f"❌ Bu kanal allaqachon qo'shilgan!")
+            bot.send_message(user_id, "❌ Bu kanal allaqachon qo'shilgan!")
         return
 
     if state.get('state') == 'set_status_id' and is_admin(user_id):
@@ -3389,14 +3464,55 @@ def callback_handler(call):
             return
 
         if data == "chadd_start" and is_admin(user_id):
-            set_state(user_id, 'add_channel_id')
             bot.answer_callback_query(call.id)
+            keyboard = InlineKeyboardMarkup(row_width=1)
+            keyboard.add(
+                InlineKeyboardButton("📢 Ochiq kanal yoki guruh", callback_data="chadd_type_public"),
+                InlineKeyboardButton("🔐 Yopiq kanal (havola orqali)", callback_data="chadd_type_private"),
+                InlineKeyboardButton("📸 Instagram sahifa", callback_data="chadd_type_instagram"),
+            )
             bot.send_message(
                 user_id,
                 "➕ <b>Yangi Majburiy Kanal Qo'shish</b>\n\n"
-                "1️⃣ Kanal ID sini kiriting:\n\n"
+                "Qaysi turdagi kanal qo'shmoqchisiz?",
+                reply_markup=keyboard
+            )
+            return
+
+        if data == "chadd_type_public" and is_admin(user_id):
+            set_state(user_id, 'add_channel_id', {'channel_type': 'public'})
+            bot.answer_callback_query(call.id)
+            bot.send_message(
+                user_id,
+                "📢 <b>Ochiq Kanal / Guruh</b>\n\n"
+                "1️⃣ Kanal yoki guruh ID sini kiriting:\n\n"
                 "📌 Misollar:\n  • <code>@kanal_username</code>\n  • <code>-1001234567890</code>\n\n"
                 "⚠️ Botni avval shu kanalga <b>admin</b> qilib qo'shing!"
+            )
+            return
+
+        if data == "chadd_type_private" and is_admin(user_id):
+            set_state(user_id, 'add_channel_id', {'channel_type': 'private'})
+            bot.answer_callback_query(call.id)
+            bot.send_message(
+                user_id,
+                "🔐 <b>Yopiq Kanal</b>\n\n"
+                "1️⃣ Kanalning <b>chat_id</b> sini kiriting:\n"
+                "(masalan: <code>-1001234567890</code>)\n\n"
+                "📌 chat_id olish uchun: kanalga @userinfobot ni qo'shing\n\n"
+                "⚠️ Botni avval shu kanalga <b>admin</b> qilib qo'shing!"
+            )
+            return
+
+        if data == "chadd_type_instagram" and is_admin(user_id):
+            set_state(user_id, 'add_channel_id', {'channel_type': 'instagram'})
+            bot.answer_callback_query(call.id)
+            bot.send_message(
+                user_id,
+                "📸 <b>Instagram Sahifa</b>\n\n"
+                "1️⃣ Instagram sahifa nomini kiriting:\n"
+                "(masalan: <code>animebum_uz</code>)\n\n"
+                "ℹ️ Instagram obunasi <b>tekshirilmaydi</b> — foydalanuvchi sahifani ko'radi, bot avtomatik ishga tushadi."
             )
             return
 
