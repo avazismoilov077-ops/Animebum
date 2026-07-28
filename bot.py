@@ -2918,11 +2918,11 @@ def file_handler(message):
 
         add_series_episode(code, ep_num, file_id, file_type)
         total_now = get_series_episodes_count(code)
-        clear_state(user_id)
 
         movie_check = get_movie(code)
         is_ongoing = movie_check and movie_check.get('is_ongoing')
         poster_id = movie_check.get('poster_file_id') if movie_check else None
+        post_ch = get_setting('post_channel_id')
 
         bot.send_message(
             user_id,
@@ -2930,17 +2930,42 @@ def file_handler(message):
             f"📺 Serial: <b>{title}</b>\n"
             f"🔢 Kod: <code>{code}</code>\n"
             f"🎞 Jami qismlar: <b>{total_now} ta</b>"
-            + ("\n\n🔔 Barcha obunachilarga xabar yuborilmoqda...\n📢 Kanalga post chiqmoqda..." if is_ongoing else "")
+            + ("\n\n🔔 Barcha obunachilarga xabar yuborilmoqda..." if is_ongoing else "")
         )
+
         if is_ongoing:
             notify_ongoing_new_episode(code, title, ep_num, total_now)
-            # Kanalga avtomatik post (poster bo'lsa rasмли, bo'lmasa matнли)
-            post_ch = get_setting('post_channel_id')
             if post_ch and movie_check:
-                try:
-                    _send_post_to_channel_ongoing(movie_check, post_ch, ep_num, total_now)
-                except Exception as pe:
-                    logger.error(f"Auto post xatosi: {pe}")
+                if poster_id:
+                    # Poster bor — darhol rasмli post yuborамиз
+                    try:
+                        _send_post_to_channel_ongoing(movie_check, post_ch, ep_num, total_now)
+                        bot.send_message(user_id, "📢 Kanalga rasмli post yuborildi! ✅")
+                    except Exception as pe:
+                        logger.error(f"Auto post xatosi: {pe}")
+                    clear_state(user_id)
+                else:
+                    # Poster yo'q — admin dan rasm so'raymiz
+                    set_state(user_id, 'ongoing_post_photo', {
+                        'code': code, 'title': title,
+                        'ep_num': ep_num, 'total': total_now, 'channel': post_ch
+                    })
+                    kb = InlineKeyboardMarkup()
+                    kb.add(InlineKeyboardButton("⏭ Rasmsiz yuborish", callback_data="ongoing_post_skip"))
+                    bot.send_message(
+                        user_id,
+                        f"📸 <b>Kanalga post uchun rasm yuboring</b>\n\n"
+                        f"📺 {title} — {ep_num}-qism\n\n"
+                        f"Yoki rasmsiz yuborish uchun tugmani bosing:",
+                        reply_markup=kb
+                    )
+                    backup_data()
+                    return
+            else:
+                clear_state(user_id)
+        else:
+            clear_state(user_id)
+
         backup_data()
         return
 
@@ -2959,6 +2984,28 @@ def file_handler(message):
             bot.send_message(user_id, "❌ Anime topilmadi!")
             return
         _send_post_to_channel(user_id, movie, channel, photo_file_id=photo_file_id)
+        return
+
+    # ── ONGOING QISM — KANAL UCHUN RASM ──────────────────────────
+    if state.get('state') == 'ongoing_post_photo' and is_admin(user_id):
+        if message.content_type != 'photo':
+            bot.send_message(user_id, "❌ Rasm yuboring yoki «Rasmsiz yuborish» tugmasini bosing!")
+            return
+        d = state.get('data', {})
+        clear_state(user_id)
+        photo_file_id = message.photo[-1].file_id
+        movie = get_movie(d.get('code'))
+        if movie:
+            # Posterni saqlab qo'yamiz — keyingi qismlarda ham ishlatiladi
+            set_movie_poster(d['code'], photo_file_id)
+            movie['poster_file_id'] = photo_file_id
+            try:
+                _send_post_to_channel_ongoing(movie, d['channel'], d['ep_num'], d['total'])
+                bot.send_message(user_id, "📢 Kanalga rasмli post yuborildi! ✅\n\n💾 Poster saqlandi — keyingi qismlar uchun ham ishlatiladi.")
+            except Exception as pe:
+                logger.error(f"Ongoing post xatosi: {pe}")
+                bot.send_message(user_id, "❌ Post yuborishda xato!")
+        backup_data()
         return
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -3507,6 +3554,22 @@ def callback_handler(call):
         if data == "referral_info":
             referral_command(call.message)
             bot.answer_callback_query(call.id)
+            return
+
+        if data == "ongoing_post_skip" and is_admin(user_id):
+            bot.answer_callback_query(call.id)
+            state = get_state(user_id)
+            d = state.get('data', {}) if state else {}
+            clear_state(user_id)
+            movie = get_movie(d.get('code', ''))
+            if movie and d.get('channel'):
+                try:
+                    _send_post_to_channel_ongoing(movie, d['channel'], d.get('ep_num', 1), d.get('total', 1))
+                    bot.send_message(user_id, "📢 Kanalga rasmsiz post yuborildi! ✅")
+                except Exception as pe:
+                    logger.error(f"Ongoing skip post xatosi: {pe}")
+                    bot.send_message(user_id, "❌ Post yuborishda xato!")
+            backup_data()
             return
 
         if data == "chadd_start" and is_admin(user_id):
