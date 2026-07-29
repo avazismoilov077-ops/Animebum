@@ -1266,12 +1266,17 @@ def send_movie(chat_id: int, movie: dict, user_status: str = 'user'):
     # ── KINO ────────────────────────────────────────────────────
     caption = (
         f"🎬 <b>{movie['title']}</b>\n\n"
-        f"┌{'─'*21}\n"
-        f"│ 📂 <b>Janr:</b> {movie['category']}\n"
-        f"│ 🔢 <b>Kod:</b> <code>{movie['code']}</code>\n"
-        f"│ 👁 <b>Ko'rishlar:</b> {movie['views']}\n"
-        f"│ ⭐ <b>Reyting:</b> {stars} ({rating:.1f}/5)\n"
-        f"└{'─'*21}"
+        f"╔{'═'*23}╗\n"
+        f"║  📂 <b>Janr:</b> {movie['category']}\n"
+        f"║  🔢 <b>Kod:</b> <code>{movie['code']}</code>\n"
+        f"║  👁 <b>Ko'rishlar:</b> {movie['views']}\n"
+        f"║  ⭐ <b>Reyting:</b> {stars} ({rating:.1f}/5)\n"
+        f"║  💾 Galereyaga saqlash mumkin\n"
+        f"╠{'═'*23}╣\n"
+        f"║  🔊 <i>Ovoz tezlashib ketsa —</i>\n"
+        f"║  <i>galereyaga yuklab tomosha</i>\n"
+        f"║  <i>qiling, ovoz to'g'irlanadi</i>\n"
+        f"╚{'═'*23}╝"
     )
 
     try:
@@ -1303,11 +1308,15 @@ def send_series_episode(chat_id: int, movie: dict, episode_num: int):
 
     caption = (
         f"🎌 <b>{movie['title']}</b>\n"
-        f"▶️ <b>{episode_num}-qism</b> / {total} ta\n\n"
-        f"┌{'─'*21}\n"
-        f"│ 🔢 <b>Kod:</b> <code>{movie['code']}</code>\n"
-        f"│ 💾 Galereyaga saqlash mumkin\n"
-        f"└{'─'*21}\n\n"
+        f"▶️ <b>{episode_num}-qism</b>  /  {total} ta\n\n"
+        f"╔{'═'*23}╗\n"
+        f"║  🔢 <b>Kod:</b>  <code>{movie['code']}</code>\n"
+        f"║  💾 Galereyaga saqlash mumkin\n"
+        f"╠{'═'*23}╣\n"
+        f"║  🔊 <i>Ovoz tezlashib ketsa —</i>\n"
+        f"║  <i>galereyaga yuklab tomosha</i>\n"
+        f"║  <i>qiling, ovoz to'g'irlanadi</i>\n"
+        f"╚{'═'*23}╝\n\n"
         f"👇 <b>Boshqa qismni tanlang:</b>"
     )
 
