@@ -412,15 +412,30 @@ def remove_channel(channel_id: str) -> bool:
     conn.close()
     return affected > 0
 
-def save_join_request(user_id: int, channel_id: str):
-    """Foydalanuvchining qo'shilish so'rovini saqlash"""
+def _normalize_chat_id(cid: str) -> str:
+    """Raqamli ID dan faqat raqamlarni olish (format farqini bartaraf etish)"""
+    return ''.join(filter(str.isdigit, cid))
+
+def save_join_request(user_id: int, telegram_chat_id: str):
+    """Foydalanuvchining qo'shilish so'rovini saqlash.
+    Telegram raqamli chat_id va channels jadvalidagi channel_id larni moslashtiradi."""
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            'INSERT OR IGNORE INTO join_requests (user_id, channel_id) VALUES (?, ?)',
-            (user_id, channel_id)
-        )
+        numeric = _normalize_chat_id(telegram_chat_id)
+        # Channels jadvalidan shu kanalga mos yozuvni topamiz
+        cursor.execute("SELECT channel_id FROM channels WHERE channel_type='private'")
+        rows = cursor.fetchall()
+        ids_to_save = {telegram_chat_id}  # har qanday holat uchun asl ID ni ham saqlaymiz
+        for row in rows:
+            stored_id = row[0]
+            if _normalize_chat_id(stored_id) == numeric:
+                ids_to_save.add(stored_id)  # DB dagi formatda ham saqlaymiz
+        for cid in ids_to_save:
+            cursor.execute(
+                'INSERT OR IGNORE INTO join_requests (user_id, channel_id) VALUES (?, ?)',
+                (user_id, cid)
+            )
         conn.commit()
     except Exception:
         pass
@@ -428,16 +443,28 @@ def save_join_request(user_id: int, channel_id: str):
         conn.close()
 
 def has_join_request(user_id: int, channel_id: str) -> bool:
-    """Foydalanuvchi shu kanalga so'rov yuborgan yoki yo'q"""
+    """Foydalanuvchi shu kanalga so'rov yuborgan yoki yo'q.
+    Aniq moslik va raqamli moslikni tekshiradi."""
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
+    # Avval aniq moslik
     cursor.execute(
         'SELECT 1 FROM join_requests WHERE user_id=? AND channel_id=?',
         (user_id, channel_id)
     )
-    result = cursor.fetchone()
+    if cursor.fetchone():
+        conn.close()
+        return True
+    # Keyin raqamli moslik (format farqi bo'lsa ham topamiz)
+    numeric = _normalize_chat_id(channel_id)
+    if numeric:
+        cursor.execute('SELECT channel_id FROM join_requests WHERE user_id=?', (user_id,))
+        for row in cursor.fetchall():
+            if _normalize_chat_id(row[0]) == numeric:
+                conn.close()
+                return True
     conn.close()
-    return result is not None
+    return False
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║               👤 FOYDALANUVCHI FUNKSIYALARI                  ║
