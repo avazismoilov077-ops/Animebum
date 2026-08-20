@@ -245,6 +245,11 @@ def create_database():
     cursor.execute("""
         DELETE FROM channels
         WHERE LOWER(COALESCE(channel_type, 'telegram')) != 'telegram'
+           OR NOT (
+               TRIM(COALESCE(channel_id, '')) GLOB '@*'
+               OR TRIM(COALESCE(channel_id, '')) GLOB '[0-9]*'
+               OR TRIM(COALESCE(channel_id, '')) GLOB '-[0-9]*'
+           )
     """)
 
     conn.commit()
@@ -387,7 +392,15 @@ def get_channels() -> list:
 
 def is_telegram_subscription_channel(channel: dict) -> bool:
     """Faqat Telegram kanallari majburiy obuna sifatida ishlatiladi."""
-    return str(channel.get('type', 'telegram')).lower() == 'telegram'
+    channel_id = str(channel.get('id', '')).strip()
+    return (
+        str(channel.get('type', 'telegram')).lower() == 'telegram'
+        and (
+            channel_id.startswith('@')
+            or channel_id.isdigit()
+            or (channel_id.startswith('-') and channel_id[1:].isdigit())
+        )
+    )
 
 
 def add_channel(channel_id: str, channel_name: str, channel_url: str, added_by: int, channel_type: str = 'telegram') -> bool:
