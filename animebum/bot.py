@@ -240,6 +240,13 @@ def create_database():
     except Exception:
         pass
 
+    # Eski versiyalarda qo'shilgan Telegram bo'lmagan kanal yozuvlarini
+    # majburiy obuna ro'yxatidan olib tashlaymiz.
+    cursor.execute("""
+        DELETE FROM channels
+        WHERE LOWER(COALESCE(channel_type, 'telegram')) != 'telegram'
+    """)
+
     conn.commit()
     conn.close()
 
@@ -376,6 +383,12 @@ def get_channels() -> list:
     rows = cursor.fetchall()
     conn.close()
     return [{"id": r[0], "name": r[1], "url": r[2], "type": r[3] or 'telegram'} for r in rows]
+
+
+def is_telegram_subscription_channel(channel: dict) -> bool:
+    """Faqat Telegram kanallari majburiy obuna sifatida ishlatiladi."""
+    return str(channel.get('type', 'telegram')).lower() == 'telegram'
+
 
 def add_channel(channel_id: str, channel_name: str, channel_url: str, added_by: int, channel_type: str = 'telegram') -> bool:
     conn = sqlite3.connect('kino_bot.db')
@@ -879,14 +892,14 @@ def check_subscription(user_id: int) -> tuple:
     # Admin va super-admin hech qachon bloklanmaydi
     if user_id in ADMIN_IDS:
         return True, []
-    channels = get_channels()
+    channels = [
+        channel for channel in get_channels()
+        if is_telegram_subscription_channel(channel)
+    ]
     if not channels:
         return True, []
     not_subscribed = []
     for channel in channels:
-        # Instagram va boshqa tashqi platformalar tekshirilmaydi
-        if channel.get('type', 'telegram') != 'telegram':
-            continue
         ch_id = channel['id']
         # Invite link (t.me/+xxxx) yoki @+xxxx shaklida saqlangan bo'lsa — tekshirib bo'lmaydi
         if '+' in str(ch_id):
@@ -997,21 +1010,10 @@ def get_admin_keyboard() -> ReplyKeyboardMarkup:
     return keyboard
 
 def get_subscription_keyboard(channels: list) -> InlineKeyboardMarkup:
-    """Foydalanuvchiga ko'rsatiladigan obuna tugmalari.
-    Telegram kanallar: 📢  |  Instagram: 📸  |  Boshqa: 🔗
-    Faqat Telegram kanallar tekshiriladi, lekin barcha havolalar ko'rsatiladi."""
+    """Faqat tekshiriladigan Telegram kanallarini ko'rsatadi."""
     keyboard = InlineKeyboardMarkup(row_width=1)
-    all_channels = get_channels()  # barcha kanallar (Instagram ham)
-    shown_ids = {ch['id'] for ch in channels}
-    # Avval tekshirilmagan Telegram kanallar
     for ch in channels:
-        icon = "📢"
-        keyboard.add(InlineKeyboardButton(f"{icon} {ch['name']}", url=ch['url']))
-    # So'ng Instagram/tashqi havolalar (har doim ko'rsatiladi)
-    for ch in all_channels:
-        if ch.get('type', 'telegram') != 'telegram' and ch['id'] not in shown_ids:
-            icon = "📸" if 'instagram' in ch['url'].lower() else "🔗"
-            keyboard.add(InlineKeyboardButton(f"{icon} {ch['name']}", url=ch['url']))
+        keyboard.add(InlineKeyboardButton(f"📢 {ch['name']}", url=ch['url']))
     keyboard.add(InlineKeyboardButton("✅ Tekshirish", callback_data="check_subscription"))
     return keyboard
 
@@ -1058,7 +1060,10 @@ def get_episodes_keyboard(code: str, total_episodes: int, viewer_id: int = None,
     return keyboard
 
 def show_channels_menu(user_id: int):
-    channels = get_channels()
+    channels = [
+        channel for channel in get_channels()
+        if is_telegram_subscription_channel(channel)
+    ]
     anime_ch = get_setting('post_channel_id') or "❌ Belgilanmagan"
     drama_ch = get_setting('post_channel_drama_id') or "❌ Belgilanmagan"
     keyboard = InlineKeyboardMarkup(row_width=1)
@@ -1080,15 +1085,12 @@ def show_channels_menu(user_id: int):
         text += "  ℹ️ Hozircha hech qanday kanal yo'q\n"
     else:
         for i, ch in enumerate(channels, 1):
-            ch_type = ch.get('type', 'telegram')
-            icon = "📢" if ch_type == 'telegram' else ("📸" if 'instagram' in ch.get('url','').lower() else "🔗")
-            type_label = "Telegram" if ch_type == 'telegram' else "Instagram/Tashqi"
-            text += f"  {i}. {icon} {ch['name']} ({type_label}) — <code>{ch['id']}</code>\n"
+            text += f"  {i}. 📢 {ch['name']} (Telegram) — <code>{ch['id']}</code>\n"
             keyboard.add(InlineKeyboardButton(
                 f"🗑️ O'chirish: {ch['name']}",
                 callback_data=f"chremove_{ch['id']}"
             ))
-    keyboard.add(InlineKeyboardButton("➕ Kanal/Instagram Qo'shish", callback_data="chadd_start"))
+    keyboard.add(InlineKeyboardButton("➕ Telegram Kanal Qo'shish", callback_data="chadd_start"))
     bot.send_message(user_id, text, reply_markup=keyboard)
 
 def get_category_keyboard() -> InlineKeyboardMarkup:
@@ -2496,35 +2498,6 @@ def text_handler(message):
         show_channels_menu(user_id)
         return
 
-    # ───── INSTAGRAM qo'shish ─────
-    if state.get('state') == 'add_ig_url' and is_admin(user_id):
-        raw = text.strip()
-        if not raw.startswith('http'):
-            raw = 'https://' + raw
-        set_state(user_id, 'add_ig_name', {'channel_url': raw})
-        bot.send_message(user_id, f"✅ Havola: <code>{raw}</code>\n\nSahifa nomini kiriting (masalan: <b>AnimeBum Instagram</b>):")
-        return
-
-    if state.get('state') == 'add_ig_name' and is_admin(user_id):
-        d = state.get('data', {})
-        ig_name = text.strip()
-        ig_url = d['channel_url']
-        # channel_id sifatida URL ni ishlatamiz (unique bo'lishi uchun)
-        success = add_channel(ig_url, ig_name, ig_url, user_id, 'instagram')
-        clear_state(user_id)
-        if success:
-            bot.send_message(
-                user_id,
-                f"✅ <b>Instagram sahifa qo'shildi!</b>\n\n"
-                f"📸 {ig_name}\n🔗 {ig_url}\n\n"
-                "ℹ️ Bu sahifa foydalanuvchilarga ko'rsatiladi, lekin obuna tekshirilmaydi."
-            )
-        else:
-            bot.send_message(user_id, "❌ Bu havola allaqachon qo'shilgan!")
-        show_channels_menu(user_id)
-        return
-
-
     if state.get('state') == 'set_status_id' and is_admin(user_id):
         try:
             target_id = int(text)
@@ -3629,13 +3602,11 @@ def callback_handler(call):
         if data == "chadd_start" and is_admin(user_id):
             bot.answer_callback_query(call.id)
             kb = InlineKeyboardMarkup(row_width=2)
-            kb.add(
-                InlineKeyboardButton("📢 Telegram Kanal", callback_data="chadd_telegram"),
-                InlineKeyboardButton("📸 Instagram", callback_data="chadd_instagram")
-            )
+            kb.add(InlineKeyboardButton("📢 Telegram Kanal", callback_data="chadd_telegram"))
             bot.send_message(
                 user_id,
-                "➕ <b>Kanal / Sahifa Qo'shish</b>\n\nQaysi platformadan qo'shmoqchisiz?",
+                "➕ <b>Telegram Kanal Qo'shish</b>\n\n"
+                "Majburiy obuna uchun Telegram kanal yoki guruhni tanlang.",
                 reply_markup=kb
             )
             return
@@ -3652,18 +3623,6 @@ def callback_handler(call):
                 "  • <code>https://t.me/animebum_1</code>  ← ommaviy kanal\n"
                 "  • <code>@animebum_1</code>  ← ommaviy kanal\n\n"
                 "⚠️ Botni avval shu kanalga <b>admin</b> qilib qo'shing!"
-            )
-            return
-
-        if data == "chadd_instagram" and is_admin(user_id):
-            bot.answer_callback_query(call.id)
-            set_state(user_id, 'add_ig_url')
-            bot.send_message(
-                user_id,
-                "📸 <b>Instagram Sahifa Qo'shish</b>\n\n"
-                "Instagram sahifa havolasini kiriting:\n\n"
-                "📌 Misol:\n  • <code>https://www.instagram.com/animebum_uz</code>\n\n"
-                "ℹ️ Instagram sahifalar faqat <b>ko'rsatiladi</b>, obuna tekshirilmaydi."
             )
             return
 
