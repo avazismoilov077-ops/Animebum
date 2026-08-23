@@ -364,8 +364,17 @@ def restore_data():
 
         for ch in data.get('channels', []):
             try:
-                cursor.execute('INSERT OR IGNORE INTO channels (channel_id, channel_name, channel_url) VALUES (?,?,?)',
-                               (ch['channel_id'], ch['channel_name'], ch['channel_url']))
+                channel_id = str(ch.get('channel_id', '')).strip()
+                if not (
+                    channel_id.startswith('@')
+                    or channel_id.isdigit()
+                    or (channel_id.startswith('-') and channel_id[1:].isdigit())
+                ):
+                    continue
+                cursor.execute(
+                    'INSERT OR IGNORE INTO channels (channel_id, channel_name, channel_url) VALUES (?,?,?)',
+                    (channel_id, ch['channel_name'], ch['channel_url'])
+                )
             except Exception:
                 pass
 
@@ -389,6 +398,18 @@ def get_channels() -> list:
     conn.close()
     return [{"id": r[0], "name": r[1], "url": r[2], "type": r[3] or 'telegram'} for r in rows]
 
+
+def is_telegram_subscription_channel(channel: dict) -> bool:
+    """Faqat Telegram kanallari majburiy obuna sifatida ishlatiladi."""
+    channel_id = str(channel.get('id', '')).strip()
+    return (
+        str(channel.get('type', 'telegram')).lower() == 'telegram'
+        and (
+            channel_id.startswith('@')
+            or channel_id.isdigit()
+            or (channel_id.startswith('-') and channel_id[1:].isdigit())
+        )
+    )
 
 
 def add_channel(channel_id: str, channel_name: str, channel_url: str, added_by: int, channel_type: str = 'telegram') -> bool:
@@ -889,6 +910,35 @@ def claim_daily_bonus(user_id: int) -> tuple:
 # ║              ✅ OBUNA TEKSHIRISH                              ║
 # ╚══════════════════════════════════════════════════════════════╝
 
+def check_subscription(user_id: int) -> tuple:
+    # Admin va super-admin hech qachon bloklanmaydi
+    if user_id in ADMIN_IDS:
+        return True, []
+    channels = [
+        channel for channel in get_channels()
+        if is_telegram_subscription_channel(channel)
+    ]
+    if not channels:
+        return True, []
+    not_subscribed = []
+    for channel in channels:
+        ch_id = channel['id']
+        # Invite link (t.me/+xxxx) yoki @+xxxx shaklida saqlangan bo'lsa — tekshirib bo'lmaydi
+        if '+' in str(ch_id):
+            logger.warning(
+                f"⚠️ '{ch_id}' — bu invite link, raqamli ID emas. "
+                "Admin eski kanalni o'chirib, raqamli ID bilan qayta qo'shishi kerak."
+            )
+            continue  # bu kanalga nisbatan tekshirishni o'tkazib yubor
+        try:
+            member = bot.get_chat_member(ch_id, user_id)
+            if member.status in ['left', 'kicked']:
+                not_subscribed.append(channel)
+        except Exception as e:
+            logger.error(f"Kanal tekshirishda xato ({ch_id}): {e}")
+            not_subscribed.append(channel)
+    return len(not_subscribed) == 0, not_subscribed
+
 # ╔══════════════════════════════════════════════════════════════╗
 # ║              🎨 KLAVIATURA FUNKSIYALARI                      ║
 # ╚══════════════════════════════════════════════════════════════╝
@@ -954,6 +1004,7 @@ def get_admin_keyboard() -> ReplyKeyboardMarkup:
         KeyboardButton("👥 Foydalanuvchilar")
     )
     keyboard.add(
+        KeyboardButton("📡 Kanal Sozlash"),
         KeyboardButton("📣 Broadcast")
     )
     keyboard.add(
@@ -978,6 +1029,14 @@ def get_admin_keyboard() -> ReplyKeyboardMarkup:
     keyboard.add(
         KeyboardButton("🔙 Orqaga")
     )
+    return keyboard
+
+def get_subscription_keyboard(channels: list) -> InlineKeyboardMarkup:
+    """Faqat tekshiriladigan Telegram kanallarini ko'rsatadi."""
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    for ch in channels:
+        keyboard.add(InlineKeyboardButton(f"📢 {ch['name']}", url=ch['url']))
+    keyboard.add(InlineKeyboardButton("✅ Tekshirish", callback_data="check_subscription"))
     return keyboard
 
 def get_rating_keyboard(movie_code: str) -> InlineKeyboardMarkup:
@@ -1023,6 +1082,10 @@ def get_episodes_keyboard(code: str, total_episodes: int, viewer_id: int = None,
     return keyboard
 
 def show_channels_menu(user_id: int):
+    channels = [
+        channel for channel in get_channels()
+        if is_telegram_subscription_channel(channel)
+    ]
     anime_ch = get_setting('post_channel_id') or "❌ Belgilanmagan"
     drama_ch = get_setting('post_channel_drama_id') or "❌ Belgilanmagan"
     keyboard = InlineKeyboardMarkup(row_width=1)
@@ -1038,6 +1101,18 @@ def show_channels_menu(user_id: int):
     keyboard.add(InlineKeyboardButton("📺 Anime Post Kanal O'zgartirish", callback_data="set_anime_post_ch"))
     keyboard.add(InlineKeyboardButton("🎭 Drama Post Kanal O'zgartirish", callback_data="set_drama_post_ch"))
 
+    # Majburiy obuna kanallar
+    text += "🔒 <b>Majburiy Obuna Kanallar:</b>\n"
+    if not channels:
+        text += "  ℹ️ Hozircha hech qanday kanal yo'q\n"
+    else:
+        for i, ch in enumerate(channels, 1):
+            text += f"  {i}. 📢 {ch['name']} (Telegram) — <code>{ch['id']}</code>\n"
+            keyboard.add(InlineKeyboardButton(
+                f"🗑️ O'chirish: {ch['name']}",
+                callback_data=f"chremove_{ch['id']}"
+            ))
+    keyboard.add(InlineKeyboardButton("➕ Telegram Kanal Qo'shish", callback_data="chadd_start"))
     bot.send_message(user_id, text, reply_markup=keyboard)
 
 def get_category_keyboard() -> InlineKeyboardMarkup:
@@ -1307,6 +1382,25 @@ def start_handler(message):
                 )
             except Exception:
                 pass
+
+    # Admin obuna tekshiruvidan o'tadi
+    if not is_admin(user_id):
+        is_subscribed, not_subscribed = check_subscription(user_id)
+        if not is_subscribed:
+            keyboard = get_subscription_keyboard(not_subscribed)
+            # Deep link bo'lsa obuna tekshirilgandan keyin shu kinoni yuborsin
+            if deep_link_code:
+                set_state(user_id, 'pending_movie', {'code': deep_link_code})
+            bot.send_message(
+                user_id,
+                f"👋 Salom, <b>{full_name}</b>!\n\n"
+                f"🎌 <b>ANIMEBUM</b>ga xush kelibsiz!\n\n"
+                f"⚠️ Botdan foydalanish uchun quyidagi kanallarga obuna bo'lishingiz shart:\n\n"
+                + "\n".join([f"➡️ {ch['name']}" for ch in not_subscribed]) +
+                f"\n\n✅ Obuna bo'lgandan so'ng <b>Tekshirish</b> tugmasini bosing.",
+                reply_markup=keyboard
+            )
+            return
 
     user_status = user.get('status', 'user')
     keyboard = get_main_keyboard_for_user(user_id, user_status)
@@ -1915,6 +2009,19 @@ def text_handler(message):
         bot.send_message(user_id, "⚠️ <b>Spam aniqlandi!</b>\n\nSiz juda ko'p xabar yubordingiz. Iltimos, 1 daqiqa kuting.")
         return
 
+    # Admin obuna tekshiruvidan o'tadi
+    if not is_admin(user_id):
+        is_subscribed, not_subscribed = check_subscription(user_id)
+        if not is_subscribed:
+            keyboard = get_subscription_keyboard(not_subscribed)
+            bot.send_message(
+                user_id,
+                "⚠️ <b>Obuna bo'lmadingiz!</b>\n\n"
+                "Botdan foydalanish uchun avval quyidagi kanallarga obuna bo'ling:",
+                reply_markup=keyboard
+            )
+            return
+
     user = get_user(user_id)
     if not user:
         register_user(user_id, message.from_user.username or '', message.from_user.full_name or '')
@@ -1928,7 +2035,7 @@ def text_handler(message):
     ADMIN_KEYBOARD_TEXTS = {
         "➕ Anime Qo'shish", "🗑️ Anime O'chirish", "➕ Qism Qo'shish",
         "📢 Kanalga Post", "📊 Statistika", "👥 Foydalanuvchilar",
-        "📣 Broadcast", "✏️ Start Matni",
+        "📡 Kanal Sozlash", "📣 Broadcast", "✏️ Start Matni",
         "✏️ Bog'lanish Matni", "🔄 Ongoing Boshqarish", "✏️ Anime Tuzatish",
         "⚙️ Post Kanal Sozlash", "💳 Danat Sozlash", "📢 Reklama Sozlash",
         "💾 Backup", "👥 Adminlar", "🔙 Orqaga", "⚙️ Admin Panel",
@@ -2631,6 +2738,9 @@ def text_handler(message):
                 reply_markup=types.ForceReply()
             )
             return
+        if text == "📡 Kanal Sozlash":
+            show_channels_menu(user_id)
+            return
         if text == "➕ Qism Qo'shish":
             add_episode_command(message)
             return
@@ -3034,6 +3144,45 @@ def callback_handler(call):
         if data == "edit_close":
             bot.answer_callback_query(call.id, "✅ Yopildi")
             bot.send_message(user_id, "✅ Tahrirlash yopildi.", reply_markup=get_admin_keyboard())
+            return
+
+        # Obuna tekshirish
+        if data == "check_subscription":
+            is_subscribed, not_subscribed = check_subscription(user_id)
+            if is_subscribed:
+                bot.answer_callback_query(call.id, "✅ Ajoyib! Siz barcha kanallarga obuna bo'lgansiz!")
+                try:
+                    bot.delete_message(call.message.chat.id, call.message.message_id)
+                except Exception:
+                    pass
+
+                # Deep link orqali kelgan bo'lsa — pending kinoni yubor
+                pending_state = get_state(user_id)
+                if pending_state and pending_state.get('state') == 'pending_movie':
+                    pending_code = pending_state.get('data', {}).get('code')
+                    clear_state(user_id)
+                    user = get_user(user_id)
+                    user_status = user.get('status', 'user') if user else 'user'
+                    if pending_code:
+                        movie = get_movie(pending_code)
+                        if movie:
+                            send_movie(user_id, movie, user_status)
+                            return
+                else:
+                    class FakeMsg:
+                        pass
+                    fake = FakeMsg()
+                    fake.from_user = call.from_user
+                    fake.text = '/start'
+                    fake.chat = call.message.chat
+                    start_handler(fake)
+            else:
+                bot.answer_callback_query(call.id, "❌ Obuna bo'lmadingiz! Avval kanallarga obuna bo'ling.")
+                keyboard = get_subscription_keyboard(not_subscribed)
+                try:
+                    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                except Exception:
+                    pass
             return
 
         # Serial sahifasini almashtirish (Keyingisi/Ortga)
@@ -3472,6 +3621,46 @@ def callback_handler(call):
                 reply_markup=types.ForceReply())
             return
 
+        if data == "chadd_start" and is_admin(user_id):
+            bot.answer_callback_query(call.id)
+            kb = InlineKeyboardMarkup(row_width=2)
+            kb.add(InlineKeyboardButton("📢 Telegram Kanal", callback_data="chadd_telegram"))
+            bot.send_message(
+                user_id,
+                "➕ <b>Telegram Kanal Qo'shish</b>\n\n"
+                "Majburiy obuna uchun Telegram kanal yoki guruhni tanlang.",
+                reply_markup=kb
+            )
+            return
+
+        if data == "chadd_telegram" and is_admin(user_id):
+            bot.answer_callback_query(call.id)
+            set_state(user_id, 'add_tg_link')
+            bot.send_message(
+                user_id,
+                "📢 <b>Telegram Kanal Qo'shish</b>\n\n"
+                "Kanal taklif havolasi yoki username kiriting:\n\n"
+                "📌 Misollar:\n"
+                "  • <code>https://t.me/+s0FSdkct6o1Mjcy</code>  ← maxfiy kanal\n"
+                "  • <code>https://t.me/animebum_1</code>  ← ommaviy kanal\n"
+                "  • <code>@animebum_1</code>  ← ommaviy kanal\n\n"
+                "⚠️ Botni avval shu kanalga <b>admin</b> qilib qo'shing!"
+            )
+            return
+
+        if data.startswith("chremove_") and is_admin(user_id):
+            ch_id = data.replace("chremove_", "", 1)
+            if remove_channel(ch_id):
+                bot.answer_callback_query(call.id, f"✅ Kanal o'chirildi!")
+                try:
+                    bot.delete_message(call.message.chat.id, call.message.message_id)
+                except Exception:
+                    pass
+                show_channels_menu(user_id)
+            else:
+                bot.answer_callback_query(call.id, "❌ Kanal topilmadi!")
+            return
+
         if data == "start_search":
             set_state(user_id, 'searching')
             bot.answer_callback_query(call.id)
@@ -3881,6 +4070,19 @@ def main():
     logger.info("💓 Self-ping thread ishga tushdi!")
 
     create_database()
+
+    # Agar hech kanal yo'q bo'lsa — @animebum_1 ni avtomatik qo'shish
+    conn = sqlite3.connect('kino_bot.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM channels')
+    if cursor.fetchone()[0] == 0:
+        cursor.execute(
+            'INSERT OR IGNORE INTO channels (channel_id, channel_name, channel_url, added_by) VALUES (?, ?, ?, ?)',
+            ('@animebum_1', 'Asosiy kanal', 'https://t.me/animebum_1', ADMIN_IDS[0])
+        )
+        conn.commit()
+        logger.info("✅ Default kanal qo'shildi: @animebum_1")
+    conn.close()
 
     try:
         me = bot.get_me()
