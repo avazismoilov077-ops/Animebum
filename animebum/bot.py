@@ -288,14 +288,12 @@ def get_manual_post_targets() -> dict:
         'ongoing': get_setting('post_channel_ongoing_id') or '@ongoinbum',
     }
 
-def get_post_promo_keyboard() -> InlineKeyboardMarkup:
-    """Har bir post ostidagi asosiy Telegram va Instagram tugmalari."""
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    keyboard.add(
-        InlineKeyboardButton("📢 Asosiy kanal — @animebum_1", url="https://t.me/animebum_1"),
-        InlineKeyboardButton("📸 Instagram — @animebum1", url="https://www.instagram.com/animebum1")
+def get_post_promo_text() -> str:
+    """Post matnida ko'rsatiladigan asosiy kanal va Instagram manzillari."""
+    return (
+        "📢 Asosiy kanal — @animebum_1\n"
+        "📸 Instagram — @animebum1"
     )
-    return keyboard
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║              🔄 BACKUP / RESTORE                             ║
@@ -3985,14 +3983,12 @@ def _send_post_to_channel_ongoing(movie: dict, channel: str, episode_num: int, t
         deep_link = f"https://t.me/{bot_username}?start=movie_{code}"
         keyboard = InlineKeyboardMarkup()
         keyboard.add(InlineKeyboardButton("▶️ Ko'rish / Watch", url=deep_link))
-        promo_keyboard = get_post_promo_keyboard()
-        for row in promo_keyboard.keyboard:
-            keyboard.add(*row)
         caption = (
             f"🔔 <b>Yangi qism chiqdi!</b>\n\n"
             f"🎌 <b>{movie['title']}</b>\n\n"
             f"▶️ <b>{episode_num}-qism</b> qo'shildi!\n"
-            f"🎞 Qism: <b>{total}/? (Davom etmoqda)</b>\n\n"
+            f"🎞 Qism: <b>{total}/? (Davom etmoqda)</b>\n"
+            f"{get_post_promo_text()}\n\n"
             f"👇 Ko'rish uchun bosing!"
         )
         if poster_id:
@@ -4018,9 +4014,6 @@ def _send_post_to_channel(
         deep_link = f"https://t.me/{bot_username}?start=movie_{code}"
         keyboard = InlineKeyboardMarkup()
         keyboard.add(InlineKeyboardButton("📥 YUKLAB OLISH 🎬", url=deep_link))
-        promo_keyboard = get_post_promo_keyboard()
-        for row in promo_keyboard.keyboard:
-            keyboard.add(*row)
 
         desc = movie.get('description') or ''
         cat = movie.get('category', '')
@@ -4032,7 +4025,8 @@ def _send_post_to_channel(
                 f"🎌 <b>{movie['title']}</b>\n\n"
                 + (f"📝 {desc}\n" if desc else "")
                 + (f"📂 Janr: {cat}\n" if cat else "")
-                + f"🎞 Qismlar: <b>{qism_str}</b>\n\n"
+                + f"🎞 Qismlar: <b>{qism_str}</b>\n"
+                + f"{get_post_promo_text()}\n\n"
                 f"👇 Ko'rish uchun bosing!"
             )
         else:
@@ -4040,6 +4034,7 @@ def _send_post_to_channel(
                 f"🎬 <b>{movie['title']}</b>\n\n"
                 + (f"📝 {desc}\n" if desc else "")
                 + (f"📂 Janr: {cat}\n" if cat else "")
+                + f"{get_post_promo_text()}\n\n"
                 + "\n👇 Ko'rish uchun bosing!"
             )
 
