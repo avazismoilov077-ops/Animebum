@@ -42,7 +42,7 @@ BACKUP_CHAT_ID = "@animebumhotira"  # Backup kanal - bu o'zgarmaydi!
 GENRES = [
     "Sport", "O'zga dunya", "Jangari", "Kundalik hayot",
     "Garem", "Etti", "Mexa", "Komediya",
-    "Fantaziya", "Drama", "Sarguzasht", "Fantastika",
+    "Fantaziya", "Sarguzasht", "Fantastika",
     "Romantika", "Maktab", "Sehir"
 ]
 
@@ -287,6 +287,16 @@ def get_manual_post_targets() -> dict:
         'anime': get_setting('post_channel_id') or '@animebum_1',
         'ongoing': get_setting('post_channel_ongoing_id') or '@ongoinbum',
     }
+
+def get_episode_post_keyboard() -> InlineKeyboardMarkup:
+    """Yangi qism posti uchun kanal tanlash klaviaturasi."""
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(
+        InlineKeyboardButton("📢 AnimeBum", callback_data="addepisode_post_anime"),
+        InlineKeyboardButton("🔄 OngoinBum", callback_data="addepisode_post_ongoing"),
+        InlineKeyboardButton("📢 Ikkala kanalga yuborish", callback_data="addepisode_post_both"),
+    )
+    return keyboard
 
 def get_post_promo_text() -> str:
     """Post matnida ko'rsatiladigan asosiy kanal va Instagram manzillari."""
@@ -558,7 +568,11 @@ def check_spam(user_id: int) -> bool:
 def get_movie(code: str) -> Optional[dict]:
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM movies WHERE code = ?', (code.strip(),))
+    cursor.execute(
+        "SELECT * FROM movies "
+        "WHERE code = ? AND COALESCE(content_type, 'anime') = 'anime'",
+        (code.strip(),)
+    )
     row = cursor.fetchone()
     conn.close()
     if row:
@@ -569,16 +583,15 @@ def get_movie(code: str) -> Optional[dict]:
     return None
 
 def add_movie_db(code: str, title: str, description: str, file_id: str,
-                 file_type: str, category: str, is_series: int, added_by: int,
-                 content_type: str = 'anime') -> bool:
+                 file_type: str, category: str, is_series: int, added_by: int) -> bool:
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
     try:
         cursor.execute('''
             INSERT INTO movies (code, title, description, file_id, file_type,
                                category, is_series, added_by, content_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (code, title, description, file_id, file_type, category, is_series, added_by, content_type))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'anime')
+        ''', (code, title, description, file_id, file_type, category, is_series, added_by))
         conn.commit()
         return True
     except sqlite3.IntegrityError:
@@ -637,7 +650,12 @@ def get_user_watched(user_id: int) -> list:
 def get_popular_movies(limit: int = 10) -> list:
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT code, title, views, category FROM movies ORDER BY views DESC LIMIT ?', (limit,))
+    cursor.execute(
+        "SELECT code, title, views, category FROM movies "
+        "WHERE COALESCE(content_type, 'anime') = 'anime' "
+        "ORDER BY views DESC LIMIT ?",
+        (limit,)
+    )
     movies = cursor.fetchall()
     conn.close()
     return movies
@@ -645,7 +663,12 @@ def get_popular_movies(limit: int = 10) -> list:
 def get_latest_movies(limit: int = 10) -> list:
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT code, title, added_at, category FROM movies ORDER BY added_at DESC LIMIT ?', (limit,))
+    cursor.execute(
+        "SELECT code, title, added_at, category FROM movies "
+        "WHERE COALESCE(content_type, 'anime') = 'anime' "
+        "ORDER BY added_at DESC LIMIT ?",
+        (limit,)
+    )
     movies = cursor.fetchall()
     conn.close()
     return movies
@@ -657,7 +680,8 @@ def get_random_anime() -> Optional[dict]:
     cursor.execute(
         'SELECT code, title, description, file_id, file_type, category, is_series, views, '
         'rating_sum, rating_count, added_by, added_at, is_ongoing, content_type, poster_file_id '
-        'FROM movies WHERE content_type="anime" ORDER BY RANDOM() LIMIT 1'
+        "FROM movies WHERE COALESCE(content_type, 'anime') = 'anime' "
+        "ORDER BY RANDOM() LIMIT 1"
     )
     row = cursor.fetchone()
     conn.close()
@@ -698,11 +722,12 @@ def get_user_full_stats(user_id: int) -> dict:
     }
 
 def get_movies_by_category(category: str) -> list:
-    """Janr bo'yicha qidirish — faqat anime (drama kanal emas)"""
+    """Janr bo'yicha anime qidirish."""
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT code, title, views FROM movies WHERE category LIKE ? AND (content_type IS NULL OR content_type = 'anime')",
+        "SELECT code, title, views FROM movies "
+        "WHERE category LIKE ? AND COALESCE(content_type, 'anime') = 'anime'",
         (f'%{category}%',)
     )
     movies = cursor.fetchall()
@@ -712,8 +737,12 @@ def get_movies_by_category(category: str) -> list:
 def search_movies(query: str) -> list:
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT code, title, category FROM movies WHERE title LIKE ? OR description LIKE ?',
-                   (f'%{query}%', f'%{query}%'))
+    cursor.execute(
+        "SELECT code, title, category FROM movies "
+        "WHERE COALESCE(content_type, 'anime') = 'anime' "
+        "AND (title LIKE ? OR description LIKE ?)",
+        (f'%{query}%', f'%{query}%')
+    )
     movies = cursor.fetchall()
     conn.close()
     return movies
@@ -721,46 +750,26 @@ def search_movies(query: str) -> list:
 def get_all_categories() -> list:
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT DISTINCT category, COUNT(*) as cnt FROM movies GROUP BY category')
+    cursor.execute(
+        "SELECT DISTINCT category, COUNT(*) as cnt FROM movies "
+        "WHERE COALESCE(content_type, 'anime') = 'anime' GROUP BY category"
+    )
     categories = cursor.fetchall()
     conn.close()
     return categories
 
 def get_genre_movie_count(genre: str) -> int:
-    """Berilgan janrga tegishli anime sonini hisoblash (drama emas)"""
+    """Berilgan janrga tegishli anime sonini hisoblash."""
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT COUNT(*) FROM movies WHERE category LIKE ? AND (content_type IS NULL OR content_type = 'anime')",
+        "SELECT COUNT(*) FROM movies "
+        "WHERE category LIKE ? AND COALESCE(content_type, 'anime') = 'anime'",
         (f'%{genre}%',)
     )
     count = cursor.fetchone()[0]
     conn.close()
     return count
-
-def get_drama_genre_count(genre: str) -> int:
-    """Berilgan janrga tegishli drama sonini hisoblash"""
-    conn = sqlite3.connect('kino_bot.db')
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT COUNT(*) FROM movies WHERE category LIKE ? AND content_type = 'drama'",
-        (f'%{genre}%',)
-    )
-    count = cursor.fetchone()[0]
-    conn.close()
-    return count
-
-def get_dramas_by_category(category: str) -> list:
-    """Janr bo'yicha drama qidirish"""
-    conn = sqlite3.connect('kino_bot.db')
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT code, title, views FROM movies WHERE category LIKE ? AND content_type = 'drama'",
-        (f'%{category}%',)
-    )
-    movies = cursor.fetchall()
-    conn.close()
-    return movies
 
 def rate_movie(user_id: int, movie_code: str, rating: int) -> str:
     conn = sqlite3.connect('kino_bot.db')
@@ -845,7 +854,8 @@ def get_all_ongoing(search: str = '') -> list:
     cursor = conn.cursor()
     query = (
         "SELECT code, title FROM movies "
-        "WHERE is_ongoing=1 AND is_series=1"
+        "WHERE is_ongoing=1 AND is_series=1 "
+        "AND COALESCE(content_type, 'anime') = 'anime'"
     )
     params = []
     if search and search.strip():
@@ -862,7 +872,10 @@ def get_all_series(search: str = '') -> list:
     """Admin qidiruvi uchun barcha seriallarni statusi bilan qaytarish."""
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
-    query = "SELECT code, title, is_ongoing FROM movies WHERE is_series=1"
+    query = (
+        "SELECT code, title, is_ongoing FROM movies "
+        "WHERE is_series=1 AND COALESCE(content_type, 'anime') = 'anime'"
+    )
     params = []
     if search and search.strip():
         query += " AND (code LIKE ? OR title LIKE ?)"
@@ -1253,7 +1266,6 @@ def show_channels_menu(user_id: int):
         if is_telegram_subscription_channel(channel)
     ]
     anime_ch = get_setting('post_channel_id') or "❌ Belgilanmagan"
-    drama_ch = get_setting('post_channel_drama_id') or "❌ Belgilanmagan"
     ongoing_ch = get_setting('post_channel_ongoing_id') or "@ongoinbum"
     keyboard = InlineKeyboardMarkup(row_width=1)
 
@@ -1263,12 +1275,10 @@ def show_channels_menu(user_id: int):
     text += (
         "📢 <b>Post Kanallar:</b>\n"
         f"  📺 Anime: <code>{anime_ch}</code>\n"
-        f"  🔄 Ongoing: <code>{ongoing_ch}</code>\n"
-        f"  🎭 Drama: <code>{drama_ch}</code>\n\n"
+        f"  🔄 Ongoing: <code>{ongoing_ch}</code>\n\n"
     )
     keyboard.add(InlineKeyboardButton("📺 Anime Post Kanal O'zgartirish", callback_data="set_anime_post_ch"))
     keyboard.add(InlineKeyboardButton("🔄 Ongoing Post Kanal O'zgartirish", callback_data="set_ongoing_post_ch"))
-    keyboard.add(InlineKeyboardButton("🎭 Drama Post Kanal O'zgartirish", callback_data="set_drama_post_ch"))
 
     # Majburiy obuna kanallar
     text += "🔒 <b>Majburiy Obuna Kanallar:</b>\n"
@@ -1285,7 +1295,7 @@ def show_channels_menu(user_id: int):
     bot.send_message(user_id, text, reply_markup=keyboard)
 
 def get_category_keyboard() -> InlineKeyboardMarkup:
-    """Anime janrlarini ko'rsatadi + Drama janrlari bo'limi"""
+    """Anime janrlarini ko'rsatadi."""
     keyboard = InlineKeyboardMarkup(row_width=3)
     buttons = []
     for genre in GENRES:
@@ -1293,19 +1303,6 @@ def get_category_keyboard() -> InlineKeyboardMarkup:
         label = f"{genre} ({count})" if count > 0 else genre
         buttons.append(InlineKeyboardButton(label, callback_data=f"category_{genre}"))
     keyboard.add(*buttons)
-    keyboard.add(InlineKeyboardButton("🎭 Drama Janrlari", callback_data="drama_genres_menu"))
-    return keyboard
-
-def get_drama_category_keyboard() -> InlineKeyboardMarkup:
-    """Drama janrlarini ko'rsatadi"""
-    keyboard = InlineKeyboardMarkup(row_width=3)
-    buttons = []
-    for genre in GENRES:
-        count = get_drama_genre_count(genre)
-        label = f"{genre} ({count})" if count > 0 else genre
-        buttons.append(InlineKeyboardButton(label, callback_data=f"drama_cat_{genre}"))
-    keyboard.add(*buttons)
-    keyboard.add(InlineKeyboardButton("🎌 Anime Janrlariga qaytish", callback_data="show_categories"))
     return keyboard
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -1810,8 +1807,7 @@ def add_movie_command(message):
     if not is_admin(user_id):
         bot.send_message(user_id, "❌ Sizda admin huquqlari yo'q!")
         return
-    # Anime qo'shishda kanal turini qayta so'ramaymiz — doim AnimeBum uchun.
-    _start_add_movie_flow(user_id, content_type='anime')
+    _start_add_movie_flow(user_id)
 
 @bot.message_handler(commands=['addmovie_start_internal'])
 def _add_movie_start(message):
@@ -1826,8 +1822,8 @@ def get_last_movie_code() -> str:
     conn.close()
     return row[0] if row else None
 
-def _start_add_movie_flow(user_id, content_type='anime'):
-    set_state(user_id, 'add_movie_code', {'content_type': content_type})
+def _start_add_movie_flow(user_id):
+    set_state(user_id, 'add_movie_code')
     label = "🎌 Anime"
     last_code = get_last_movie_code()
     if last_code and last_code.isdigit():
@@ -1944,71 +1940,6 @@ def set_post_channel_command(message):
         f"✅ <b>Post kanali saqlandi!</b>\n\n"
         f"Kanal: <code>{ch_id}</code>\n\n"
         f"Bu kanal /postchannel menyusidagi AnimeBum sifatida ishlatiladi."
-    )
-
-@bot.message_handler(commands=['setdramachannel'])
-def set_drama_channel_command(message):
-    """Drama post kanalini sozlash"""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.send_message(user_id, "❌ Sizda admin huquqlari yo'q!")
-        return
-    parts = message.text.split()
-    if len(parts) < 2:
-        current = get_setting('post_channel_drama_id', 'Belgilanmagan')
-        bot.send_message(
-            user_id,
-            f"🎭 <b>Drama Post Kanali Sozlash</b>\n\n"
-            f"Hozirgi drama kanali: <code>{current}</code>\n\n"
-            f"Ishlatish: <code>/setdramachannel @drama_kanal</code>\n"
-            f"yoki: <code>/setdramachannel -1001234567890</code>\n\n"
-            f"⚠️ Botni o'sha kanalga admin qilib qo'shing!"
-        )
-        return
-    ch_id = parts[1].strip()
-    set_setting('post_channel_drama_id', ch_id)
-    bot.send_message(
-        user_id,
-        f"✅ <b>Drama post kanali saqlandi!</b>\n\n"
-        f"Kanal: <code>{ch_id}</code>\n\n"
-        f"Endi drama postlari shu kanalga chiqadi."
-    )
-
-@bot.message_handler(commands=['setdramatype'])
-def set_drama_type_command(message):
-    """Mavjud kontentni drama yoki anime deb belgilash"""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.send_message(user_id, "❌ Sizda admin huquqlari yo'q!")
-        return
-    parts = message.text.split()
-    if len(parts) < 2:
-        bot.send_message(
-            user_id,
-            "🎭 <b>Kontent turini o'zgartirish</b>\n\n"
-            "Ishlatish:\n"
-            "<code>/setdramatype KOD</code> — Drama kanalga o'tkazish\n"
-            "<code>/setdramatype KOD anime</code> — Anime botga qaytarish\n\n"
-            "Misol: <code>/setdramatype D5</code>"
-        )
-        return
-    code = parts[1].strip()
-    new_type = 'anime' if (len(parts) >= 3 and parts[2].strip().lower() == 'anime') else 'drama'
-    movie = get_movie(code)
-    if not movie:
-        bot.send_message(user_id, f"❌ <code>{code}</code> kodli kino topilmadi!")
-        return
-    conn = sqlite3.connect('kino_bot.db')
-    conn.execute("UPDATE movies SET content_type = ? WHERE code = ?", (new_type, code))
-    conn.commit()
-    conn.close()
-    label = "🎭 Drama kanal" if new_type == 'drama' else "🎌 Anime bot"
-    bot.send_message(
-        user_id,
-        f"✅ <b>{movie['title']}</b>\n"
-        f"Kod: <code>{code}</code>\n"
-        f"Tur: {label}\n\n"
-        f"Endi janr qidiruvida {'chiqmaydi' if new_type == 'drama' else 'chiqadi'}."
     )
 
 @bot.message_handler(commands=['broadcast'])
@@ -2320,10 +2251,12 @@ def text_handler(message):
         ep_num = int(text)
         data = state.get('data', {})
         data['episode_num'] = ep_num
-        set_state(user_id, 'add_episode_file', data)
+        set_state(user_id, 'add_episode_channel_select', data)
         bot.send_message(
             user_id,
-            f"✅ {ep_num}-qism uchun video faylni yuboring:"
+            f"✅ <b>{ep_num}-qism</b> tayyor.\n\n"
+            "Post qaysi kanalga yuborilsin?",
+            reply_markup=get_episode_post_keyboard()
         )
         return
 
@@ -2337,15 +2270,10 @@ def text_handler(message):
         channels = post_data.get('channels')
         labels = post_data.get('channel_labels') or []
 
-        # Eski xabardan kirilgan bo'lsa, kontent turiga qarab bitta kanalni tanlash.
+        # Eski xabardan kirilgan bo'lsa, standart AnimeBum kanalini tanlash.
         if not channels:
-            content_type = movie.get('content_type', 'anime')
-            if content_type == 'drama':
-                channels = [get_setting('post_channel_drama_id') or get_setting('post_channel_id')]
-                labels = ["🎭 Drama kanali"]
-            else:
-                channels = [get_setting('post_channel_id') or '@animebum_1']
-                labels = ["📺 AnimeBum"]
+            channels = [get_setting('post_channel_id') or '@animebum_1']
+            labels = ["📺 AnimeBum"]
             channels = [ch for ch in channels if ch]
 
         if not channels:
@@ -2523,15 +2451,6 @@ def text_handler(message):
         show_channels_menu(user_id)
         return
 
-    if state.get('state') == 'set_drama_post_channel' and is_admin(user_id):
-        ch_id = text.strip()
-        set_setting('post_channel_drama_id', ch_id)
-        clear_state(user_id)
-        bot.send_message(user_id,
-            f"✅ <b>Drama post kanali saqlandi!</b>\nKanal: <code>{ch_id}</code>")
-        show_channels_menu(user_id)
-        return
-
     if state.get('state') == 'edit_donat_text' and is_admin(user_id):
         new_text = message.text.strip()
         set_setting('donat_text', new_text)
@@ -2574,7 +2493,6 @@ def text_handler(message):
             category=data.get('category', 'Umumiy'),
             is_series=1,
             added_by=user_id,
-            content_type=data.get('content_type', 'anime')
         )
         if is_ongoing:
             set_movie_ongoing(data['code'], 1)
@@ -3039,7 +2957,6 @@ def file_handler(message):
             category=data.get('category', 'Umumiy'),
             is_series=0,
             added_by=user_id,
-            content_type=data.get('content_type', 'anime')
         )
         clear_state(user_id)
         if success:
@@ -3115,33 +3032,31 @@ def file_handler(message):
 
         add_series_episode(code, ep_num, file_id, file_type)
         total_now = get_series_episodes_count(code)
+        post_channels = data.get('post_channels') or []
         clear_state(user_id)
 
         movie_check = get_movie(code)
         is_ongoing = movie_check and movie_check.get('is_ongoing')
-        poster_id = movie_check.get('poster_file_id') if movie_check else None
-
         bot.send_message(
             user_id,
             f"✅ <b>{ep_num}-qism qo'shildi!</b>\n\n"
             f"📺 Serial: <b>{title}</b>\n"
             f"🔢 Kod: <code>{code}</code>\n"
             f"🎞 Jami qismlar: <b>{total_now} ta</b>"
-            + ("\n\n🔔 Barcha obunachilarga xabar yuborilmoqda...\n📢 Kanalga post chiqmoqda..." if is_ongoing else "")
+            + (
+                "\n\n🔔 Barcha obunachilarga xabar yuborilmoqda..."
+                if is_ongoing else ""
+            )
+            + ("\n📢 Tanlangan kanal(lar)ga post chiqmoqda..." if post_channels else "")
         )
         if is_ongoing:
             notify_ongoing_new_episode(code, title, ep_num, total_now)
-            # content_type dan to'g'ri kanal tanlanadi
-            ctype = movie_check.get('content_type', 'anime') if movie_check else 'anime'
-            if ctype == 'drama':
-                post_ch = get_setting('post_channel_drama_id') or get_setting('post_channel_id')
-            else:
-                post_ch = get_setting('post_channel_id') or get_setting('post_channel_drama_id')
-            if post_ch and movie_check:
+        if post_channels and movie_check:
+            for post_ch in post_channels:
                 try:
-                    _send_post_to_channel_ongoing(movie_check, post_ch, ep_num, total_now)
+                    _send_new_episode_post(movie_check, post_ch, ep_num, total_now)
                 except Exception as pe:
-                    logger.error(f"Auto post xatosi: {pe}")
+                    logger.error(f"Yangi qism posti xatosi ({post_ch}): {pe}")
         backup_data()
         return
 
@@ -3454,55 +3369,6 @@ def callback_handler(call):
                 bot.answer_callback_query(call.id)
             return
 
-        # Drama janrlar menyusi
-        if data == "drama_genres_menu":
-            bot.answer_callback_query(call.id)
-            bot.send_message(
-                user_id,
-                "🎭 <b>Drama Janrlari</b>\nJanrni tanlang:",
-                reply_markup=get_drama_category_keyboard()
-            )
-            return
-
-        # Drama kategoriya kinolar (sahifalash bilan)
-        if data.startswith("drama_cat_") or data.startswith("drmapage_"):
-            GENRE_PAGE_SIZE = 10
-            if data.startswith("drmapage_"):
-                parts = data.replace("drmapage_", "").rsplit("_", 1)
-                category = parts[0]
-                page = int(parts[1])
-            else:
-                category = data.replace("drama_cat_", "")
-                page = 0
-            movies = get_dramas_by_category(category)
-            if not movies:
-                bot.answer_callback_query(call.id, f"❌ '{category}' janrida drama yo'q!")
-                return
-            total = len(movies)
-            total_pages = (total + GENRE_PAGE_SIZE - 1) // GENRE_PAGE_SIZE
-            page = max(0, min(page, total_pages - 1))
-            start = page * GENRE_PAGE_SIZE
-            page_movies = movies[start:start + GENRE_PAGE_SIZE]
-            text_msg = (
-                f"🎭 <b>{category}</b> — {total} ta drama\n"
-                f"📄 {page+1}/{total_pages} sahifa\n"
-                f"━━━━━━━━━━━━━━━━━━━━━"
-            )
-            keyboard = InlineKeyboardMarkup(row_width=1)
-            for code, title, views in page_movies:
-                keyboard.add(InlineKeyboardButton(f"▶️ {title[:35]}", callback_data=f"get_movie_{code}"))
-            nav = []
-            if page > 0:
-                nav.append(InlineKeyboardButton("⬅️ Oldingi", callback_data=f"drmapage_{category}_{page-1}"))
-            if page < total_pages - 1:
-                nav.append(InlineKeyboardButton("➡️ Keyingi", callback_data=f"drmapage_{category}_{page+1}"))
-            if nav:
-                keyboard.row(*nav)
-            keyboard.add(InlineKeyboardButton("🔙 Drama Janrlari", callback_data="drama_genres_menu"))
-            bot.answer_callback_query(call.id)
-            bot.send_message(user_id, text_msg, reply_markup=keyboard)
-            return
-
         # Anime kategoriya kinolar (sahifalash bilan)
         if data.startswith("category_") or data.startswith("catpage_"):
             GENRE_PAGE_SIZE = 10
@@ -3618,13 +3484,6 @@ def callback_handler(call):
                     )
             return
 
-        # Admin content type tanlash (anime yoki drama)
-        if data.startswith("admin_ctype_") and is_admin(user_id):
-            ctype = data.replace("admin_ctype_", "")
-            bot.answer_callback_query(call.id, "✅ Tanlandi")
-            _start_add_movie_flow(user_id, content_type=ctype)
-            return
-
         # Admin kino/serial turi tanlash
         if data.startswith("admin_type_") and is_admin(user_id):
             state = get_state(user_id)
@@ -3679,7 +3538,7 @@ def callback_handler(call):
                 return
             existing = get_series_episodes_count(code)
             next_ep = existing + 1
-            set_state(user_id, 'add_episode_file', {
+            set_state(user_id, 'add_episode_channel_select', {
                 'code': code,
                 'title': movie['title'],
                 'episode_num': next_ep
@@ -3689,7 +3548,41 @@ def callback_handler(call):
                 user_id,
                 f"➕ <b>{movie['title']}</b>\n\n"
                 f"Hozir: <b>{existing} qism</b> mavjud\n\n"
-                f"<b>{next_ep}-qism</b> faylini yuboring (video):"
+                f"<b>{next_ep}-qism</b> uchun post kanalini tanlang:",
+                reply_markup=get_episode_post_keyboard()
+            )
+            return
+
+        # Yangi qism posti uchun kanal tanlash
+        if data in (
+            "addepisode_post_anime",
+            "addepisode_post_ongoing",
+            "addepisode_post_both",
+        ) and is_admin(user_id):
+            state = get_state(user_id)
+            if state.get('state') != 'add_episode_channel_select':
+                bot.answer_callback_query(call.id, "❌ Yangi qism qo'shish jarayoni topilmadi!")
+                return
+
+            targets = get_manual_post_targets()
+            target_map = {
+                "addepisode_post_anime": ([targets['anime']], "📢 AnimeBum"),
+                "addepisode_post_ongoing": ([targets['ongoing']], "🔄 OngoinBum"),
+                "addepisode_post_both": (
+                    [targets['anime'], targets['ongoing']],
+                    "📢 AnimeBum va 🔄 OngoinBum",
+                ),
+            }
+            channels, label = target_map[data]
+            channels = list(dict.fromkeys(channels))
+            episode_data = state.get('data', {})
+            episode_data['post_channels'] = channels
+            set_state(user_id, 'add_episode_file', episode_data)
+            bot.answer_callback_query(call.id, f"✅ {label} tanlandi")
+            bot.send_message(
+                user_id,
+                f"📢 Post kanali: <b>{label}</b>\n\n"
+                f"📹 <b>{episode_data.get('episode_num')}-qism</b> faylini yuboring (video):"
             )
             return
 
@@ -3795,18 +3688,6 @@ def callback_handler(call):
                 reply_markup=types.ForceReply())
             return
 
-        if data == "set_drama_post_ch" and is_admin(user_id):
-            bot.answer_callback_query(call.id)
-            cur = get_setting('post_channel_drama_id') or "Belgilanmagan"
-            set_state(user_id, 'set_drama_post_channel')
-            bot.send_message(user_id,
-                f"🎭 <b>Drama Post Kanal</b>\n\nHozirgi: <code>{cur}</code>\n\n"
-                "Yangi kanal username yoki ID kiriting:\n"
-                "Masalan: <code>@drama_kanal</code>\n\n"
-                "⚠️ Botni kanalga <b>admin</b> qilib qo'shing!",
-                reply_markup=types.ForceReply())
-            return
-
         if data == "chadd_start" and is_admin(user_id):
             bot.answer_callback_query(call.id)
             kb = InlineKeyboardMarkup(row_width=2)
@@ -3899,47 +3780,6 @@ def callback_handler(call):
                     "Qaysi anime/serial kodini post qilmoqchisiz?\n"
                     "Kodini kiriting (masalan: <code>101</code>):",
                     reply_markup=types.ForceReply()
-                )
-            return
-
-        # Eski kanal tanlash callback'lari
-        if data in ("postchan_anime", "postchan_drama") and is_admin(user_id):
-            if data == "postchan_anime":
-                ch = get_setting('post_channel_id')
-                label = "📺 Anime kanali"
-            else:
-                ch = get_setting('post_channel_drama_id')
-                label = "🎭 Drama kanali"
-            if not ch:
-                bot.answer_callback_query(call.id, "❌ Bu kanal hali sozlanmagan!")
-                return
-            bot.answer_callback_query(call.id, f"✅ {label} tanlandi")
-            # Agar oldin kod berilgan bo'lsa (post_channel_select_pending state)
-            cur_state = get_state(user_id)
-            pending_code = None
-            if cur_state and cur_state.get('state') == 'post_channel_select_pending':
-                pending_code = (cur_state.get('data') or {}).get('code')
-            if pending_code:
-                movie = get_movie(pending_code)
-                if not movie:
-                    clear_state(user_id)
-                    bot.send_message(user_id, f"❌ <code>{pending_code}</code> kodli anime topilmadi!")
-                    return
-                set_state(user_id, 'post_channel_photo', {'code': pending_code, 'channel': ch})
-                bot.send_message(
-                    user_id,
-                    f"🎌 <b>{movie['title']}</b>\n"
-                    f"📢 Kanal: {label}\n\n"
-                    f"📸 Post uchun <b>RASM</b> yuboring:\n"
-                    f"(yoki <code>skip</code> yozing — rasmsiz post yuborish)"
-                )
-            else:
-                set_state(user_id, 'post_channel_ask_code', {'channel': ch, 'channel_label': label})
-                bot.send_message(
-                    user_id,
-                    f"📢 <b>{label}</b>: <code>{ch}</code>\n\n"
-                    f"Qaysi anime/serial kodini post qilmoqchisiz?\n"
-                    f"Kodini kiriting (masalan: <code>A12</code> yoki <code>D5</code>):"
                 )
             return
 
@@ -4137,7 +3977,7 @@ def callback_handler(call):
                 return
             existing = get_series_episodes_count(code)
             next_ep = existing + 1
-            set_state(user_id, 'add_episode_file', {
+            set_state(user_id, 'add_episode_channel_select', {
                 'code': code,
                 'title': movie['title'],
                 'episode_num': next_ep
@@ -4147,7 +3987,8 @@ def callback_handler(call):
                 user_id,
                 f"➕ <b>{movie['title']}</b>\n\n"
                 f"Hozir: <b>{existing} qism</b> mavjud\n\n"
-                f"📹 <b>{next_ep}-qism</b> faylini yuboring (video):"
+                f"📹 <b>{next_ep}-qism</b> uchun post kanalini tanlang:",
+                reply_markup=get_episode_post_keyboard()
             )
             return
 
@@ -4162,7 +4003,7 @@ def callback_handler(call):
 # ║              📢 KANALGA POST YUBORISH                        ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-def _send_post_to_channel_ongoing(movie: dict, channel: str, episode_num: int, total: int):
+def _send_new_episode_post(movie: dict, channel: str, episode_num: int, total: int):
     """Ongoing serialga yangi qism qo'shilganda kanalga avtomatik post (poster bo'lsa rasмli, bo'lmasa matнли)"""
     try:
         bot_info = bot.get_me()
@@ -4170,13 +4011,17 @@ def _send_post_to_channel_ongoing(movie: dict, channel: str, episode_num: int, t
         code = movie['code']
         poster_id = movie.get('poster_file_id') or ''
         deep_link = f"https://t.me/{bot_username}?start=movie_{code}"
+        episode_count = (
+            f"{total}/? (Davom etmoqda)"
+            if movie.get('is_ongoing') else f"{total} ta"
+        )
         keyboard = InlineKeyboardMarkup()
         keyboard.add(InlineKeyboardButton("▶️ Ko'rish / Watch", url=deep_link))
         caption = (
             f"🔔 <b>Yangi qism chiqdi!</b>\n\n"
             f"🎌 <b>{movie['title']}</b>\n\n"
             f"▶️ <b>{episode_num}-qism</b> qo'shildi!\n"
-            f"🎞 Qism: <b>{total}/? (Davom etmoqda)</b>\n"
+            f"🎞 Qism: <b>{episode_count}</b>\n"
             f"{get_post_promo_text()}\n\n"
             f"👇 Ko'rish uchun bosing!"
         )
@@ -4185,7 +4030,7 @@ def _send_post_to_channel_ongoing(movie: dict, channel: str, episode_num: int, t
         else:
             bot.send_message(channel, caption, reply_markup=keyboard)
     except Exception as e:
-        logger.error(f"_send_post_to_channel_ongoing xatosi: {e}")
+        logger.error(f"_send_new_episode_post xatosi: {e}")
 
 
 def _send_post_to_channel(
