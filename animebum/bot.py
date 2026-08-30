@@ -946,7 +946,10 @@ def check_subscription(user_id: int) -> tuple:
             continue  # bu kanalga nisbatan tekshirishni o'tkazib yubor
         try:
             member = bot.get_chat_member(ch_id, user_id)
-            if member.status in ['left', 'kicked']:
+            is_member = getattr(member, 'is_member', True)
+            if member.status in ['left', 'kicked'] or (
+                member.status == 'restricted' and not is_member
+            ):
                 not_subscribed.append(channel)
         except Exception as e:
             logger.error(f"Kanal tekshirishda xato ({ch_id}): {e}")
@@ -1941,10 +1944,12 @@ def stats_command(message):
 # ║            📨 XABAR HANDLERLARI (HOLATLAR)                   ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-@bot.message_handler(func=lambda m: getattr(m, 'forward_from_chat', None) is not None
-                                    and getattr(m.forward_from_chat, 'type', '') == 'channel')
+@bot.message_handler(func=lambda m: (
+    getattr(m, 'forward_from_chat', None) is not None
+    and getattr(m.forward_from_chat, 'type', '') in ('channel', 'group', 'supergroup')
+))
 def forwarded_channel_handler(message):
-    """Kanaldan forward qilingan xabar — kanal ID va nomini avtomatik aniqlaydi."""
+    """Kanal yoki guruhdan forward qilingan xabardan chat ID va nomini oladi."""
     user_id = message.from_user.id
     if not is_admin(user_id):
         return
@@ -1955,13 +1960,14 @@ def forwarded_channel_handler(message):
 
     chat = message.forward_from_chat
     ch_id = str(chat.id)           # masalan: -1001234567890
-    ch_title = chat.title or "Kanal"
+    chat_type = getattr(chat, 'type', 'channel')
+    ch_title = chat.title or ("Guruh" if chat_type in ('group', 'supergroup') else "Kanal")
     # URL: agar username bo'lsa ochiq havola, bo'lmasa t.me/c/<id>
     if chat.username:
         ch_url = f"https://t.me/{chat.username}"
         ch_id_saved = f"@{chat.username}"
     else:
-        ch_url = f"https://t.me/c/{ch_id.lstrip('-100').lstrip('-')}"
+        ch_url = f"https://t.me/c/{ch_id.removeprefix('-100')}"
         ch_id_saved = ch_id
 
     # Invite link saqlangan bo'lsa (maxfiy kanal) URLni o'sha bilan almashtir
@@ -2456,19 +2462,22 @@ def text_handler(message):
         # Invite link (maxfiy kanal): t.me/+xxxx
         if '+' in raw and ('t.me' in raw or raw.startswith('+')):
             # URL ni to'g'rilash
-            if not raw.startswith('http'):
-                invite_url = 'https://t.me/' + raw.lstrip('https://t.me/').lstrip('/')
-            else:
+            if raw.startswith('+'):
+                invite_url = f"https://t.me/{raw}"
+            elif raw.startswith(('http://', 'https://')):
                 invite_url = raw
+            elif raw.startswith('t.me/'):
+                invite_url = f"https://{raw}"
+            else:
+                invite_url = f"https://t.me/{raw.lstrip('/')}"
             set_state(user_id, 'add_tg_private_id', {'channel_url': invite_url})
             bot.send_message(
                 user_id,
                 f"✅ Taklif havolasi saqlandi:\n<code>{invite_url}</code>\n\n"
-                "📌 Maxfiy kanal uchun raqamli ID ham kerak.\n\n"
-                "Kanal raqamli ID sini kiriting:\n"
-                "Masalan: <code>-1001234567890</code>\n\n"
-                "💡 ID ni bilish uchun: kanalga <b>@userinfobot</b> qo'shing yoki "
-                "kanaldan istalgan xabarni <b>@userinfobot</b> ga forward qiling."
+                "📌 Endi shu kanal yoki guruhdan istalgan xabarni botga "
+                "<b>forward</b> qiling — bot ID va nomini avtomatik oladi.\n\n"
+                "Yoki raqamli ID yuboring:\n"
+                "Masalan: <code>-1001234567890</code>"
             )
         else:
             # Ommaviy kanal: @username yoki t.me/username yoki numeric ID
