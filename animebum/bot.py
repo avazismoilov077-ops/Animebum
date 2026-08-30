@@ -292,7 +292,7 @@ def get_post_promo_text() -> str:
     """Post matnida ko'rsatiladigan asosiy kanal va Instagram manzillari."""
     return (
         "📢 Asosiy kanal — @animebum_1\n"
-        "📸 Instagram — @animebum1"
+        '<a href="https://www.instagram.com/animebum1/">📸 Instagram — @animebum1</a>'
     )
 
 # ╔══════════════════════════════════════════════════════════════╗
