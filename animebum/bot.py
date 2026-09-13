@@ -29,7 +29,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
 # ║                    ⚙️ BOT SOZLAMALARI                        ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-BOT_TOKEN = os.environ.get('BOT_TOKEN', '8746287840:AAEjaeBqz89607bs0_W34DeFGvjLx13B9RY')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '8746287840:AAE9QaT3s4Hmxhzob97iaiNHgsDeUkVtvQA')
 ADMIN_IDS = [6998664132]
 
 BOT_USERNAME = "animebum_bot"
