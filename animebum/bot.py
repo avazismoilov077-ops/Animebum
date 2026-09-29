@@ -18,6 +18,7 @@ import os
 import threading
 from datetime import datetime, timedelta
 from typing import Optional
+from urllib.parse import urlparse
 
 from flask import Flask
 
@@ -242,15 +243,31 @@ def create_database():
     except Exception:
         pass
 
-    # Eski versiyalarda qo'shilgan Telegram bo'lmagan kanal yozuvlarini
+    # Eski versiyalarda qo'shilgan Instagram yozuvlarini turi bilan belgilaymiz.
+    # Ular havola sifatida ko'rsatiladi, lekin obuna tekshiruviga kiritilmaydi.
+    cursor.execute("""
+        UPDATE channels
+        SET channel_type = 'instagram'
+        WHERE LOWER(COALESCE(channel_url, '')) LIKE '%instagram.com%'
+           OR LOWER(COALESCE(channel_id, '')) LIKE '%instagram.com%'
+    """)
+
+    # Faqat qo'llab-quvvatlanmaydigan yoki noto'g'ri Telegram yozuvlarini
     # majburiy obuna ro'yxatidan olib tashlaymiz.
     cursor.execute("""
         DELETE FROM channels
-        WHERE LOWER(COALESCE(channel_type, 'telegram')) != 'telegram'
-           OR NOT (
+        WHERE LOWER(COALESCE(channel_type, 'telegram')) NOT IN ('telegram', 'instagram')
+           OR (
+               LOWER(COALESCE(channel_type, 'telegram')) = 'telegram'
+               AND NOT (
                TRIM(COALESCE(channel_id, '')) GLOB '@*'
                OR TRIM(COALESCE(channel_id, '')) GLOB '[0-9]*'
                OR TRIM(COALESCE(channel_id, '')) GLOB '-[0-9]*'
+               )
+           )
+           OR (
+               LOWER(COALESCE(channel_type, 'telegram')) = 'instagram'
+               AND LOWER(COALESCE(channel_url, '')) NOT LIKE '%instagram.com%'
            )
     """)
 
@@ -323,8 +340,11 @@ def backup_data():
         movies = [dict(zip(['code','title','description','file_id','file_type','category','is_series','added_by','is_ongoing','content_type','poster_file_id'], r)) for r in cursor.fetchall()]
         cursor.execute('SELECT code, episode_num, file_id, file_type FROM series_episodes')
         episodes = [dict(zip(['code','episode_num','file_id','file_type'], r)) for r in cursor.fetchall()]
-        cursor.execute('SELECT channel_id, channel_name, channel_url FROM channels')
-        channels = [dict(zip(['channel_id','channel_name','channel_url'], r)) for r in cursor.fetchall()]
+        cursor.execute('SELECT channel_id, channel_name, channel_url, channel_type FROM channels')
+        channels = [
+            dict(zip(['channel_id', 'channel_name', 'channel_url', 'channel_type'], r))
+            for r in cursor.fetchall()
+        ]
         conn.close()
 
         data_json = json.dumps({'movies': movies, 'episodes': episodes, 'channels': channels}, ensure_ascii=False, indent=2)
@@ -391,15 +411,20 @@ def restore_data():
         for ch in data.get('channels', []):
             try:
                 channel_id = str(ch.get('channel_id', '')).strip()
-                if not (
+                channel_type = str(ch.get('channel_type', 'telegram')).lower().strip()
+                if channel_type == 'instagram':
+                    if 'instagram.com' not in str(ch.get('channel_url', '')).lower():
+                        continue
+                elif not (
                     channel_id.startswith('@')
                     or channel_id.isdigit()
                     or (channel_id.startswith('-') and channel_id[1:].isdigit())
                 ):
                     continue
                 cursor.execute(
-                    'INSERT OR IGNORE INTO channels (channel_id, channel_name, channel_url) VALUES (?,?,?)',
-                    (channel_id, ch['channel_name'], ch['channel_url'])
+                    'INSERT OR IGNORE INTO channels '
+                    '(channel_id, channel_name, channel_url, channel_type) VALUES (?,?,?,?)',
+                    (channel_id, ch['channel_name'], ch['channel_url'], channel_type)
                 )
             except Exception:
                 pass
@@ -436,6 +461,44 @@ def is_telegram_subscription_channel(channel: dict) -> bool:
             or (channel_id.startswith('-') and channel_id[1:].isdigit())
         )
     )
+
+
+def is_instagram_link(channel: dict) -> bool:
+    """Instagram majburiy obuna oynasida havola sifatida ko'rsatiladi."""
+    return (
+        str(channel.get('type', '')).lower() == 'instagram'
+        and 'instagram.com' in str(channel.get('url', '')).lower()
+    )
+
+
+def is_supported_channel(channel: dict) -> bool:
+    return is_telegram_subscription_channel(channel) or is_instagram_link(channel)
+
+
+def normalize_instagram_link(value: str) -> Optional[tuple]:
+    """Instagram username yoki havolasini (ID, nom, URL) ko'rinishiga keltiradi."""
+    raw = value.strip()
+    if raw.startswith('@'):
+        raw = raw[1:]
+    if raw.startswith('http://'):
+        url = raw.replace('http://', 'https://', 1)
+    elif raw.startswith('https://'):
+        url = raw
+    else:
+        url = f'https://www.instagram.com/{raw}/'
+
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or '').lower()
+    if (
+        hostname != 'instagram.com'
+        and not hostname.endswith('.instagram.com')
+    ) or ' ' in url:
+        return None
+    profile = parsed.path.strip('/').split('/')[0].strip()
+    if not profile or profile in ('.', '..'):
+        return None
+    canonical_url = f'https://www.instagram.com/{profile}/'
+    return canonical_url, f'Instagram — @{profile}'
 
 
 def add_channel(channel_id: str, channel_name: str, channel_url: str, added_by: int, channel_type: str = 'telegram') -> bool:
@@ -1213,10 +1276,16 @@ def get_admin_keyboard() -> ReplyKeyboardMarkup:
     return keyboard
 
 def get_subscription_keyboard(channels: list) -> InlineKeyboardMarkup:
-    """Faqat tekshiriladigan Telegram kanallarini ko'rsatadi."""
+    """Tekshirilmagan Telegram kanallari va Instagram havolalarini ko'rsatadi."""
     keyboard = InlineKeyboardMarkup(row_width=1)
-    for ch in channels:
-        keyboard.add(InlineKeyboardButton(f"📢 {ch['name']}", url=ch['url']))
+    blocked_ids = {str(ch.get('id', '')) for ch in channels}
+    display_channels = [
+        ch for ch in get_channels()
+        if is_instagram_link(ch) or str(ch.get('id', '')) in blocked_ids
+    ]
+    for ch in display_channels:
+        icon = "📸" if is_instagram_link(ch) else "📢"
+        keyboard.add(InlineKeyboardButton(f"{icon} {ch['name']}", url=ch['url']))
     keyboard.add(InlineKeyboardButton("✅ Tekshirish", callback_data="check_subscription"))
     return keyboard
 
@@ -1265,7 +1334,7 @@ def get_episodes_keyboard(code: str, total_episodes: int, viewer_id: int = None,
 def show_channels_menu(user_id: int):
     channels = [
         channel for channel in get_channels()
-        if is_telegram_subscription_channel(channel)
+        if is_supported_channel(channel)
     ]
     anime_ch = get_setting('post_channel_id') or "❌ Belgilanmagan"
     ongoing_ch = get_setting('post_channel_ongoing_id') or "@ongoinbum"
@@ -1288,12 +1357,16 @@ def show_channels_menu(user_id: int):
         text += "  ℹ️ Hozircha hech qanday kanal yo'q\n"
     else:
         for i, ch in enumerate(channels, 1):
-            text += f"  {i}. 📢 {ch['name']} (Telegram) — <code>{ch['id']}</code>\n"
+            if is_instagram_link(ch):
+                text += f"  {i}. 📸 {ch['name']} (Instagram) — <code>{ch['url']}</code>\n"
+            else:
+                text += f"  {i}. 📢 {ch['name']} (Telegram) — <code>{ch['id']}</code>\n"
             keyboard.add(InlineKeyboardButton(
                 f"🗑️ O'chirish: {ch['name']}",
                 callback_data=f"chremove_{ch['id']}"
             ))
     keyboard.add(InlineKeyboardButton("➕ Telegram Kanal Qo'shish", callback_data="chadd_start"))
+    keyboard.add(InlineKeyboardButton("➕ Instagram Havolasi Qo'shish", callback_data="chadd_instagram"))
     bot.send_message(user_id, text, reply_markup=keyboard)
 
 def get_category_keyboard() -> InlineKeyboardMarkup:
@@ -2244,6 +2317,38 @@ def text_handler(message):
             f"Nechchi-qism qo'shmoqchisiz? Raqam yuboring:\n"
             f"Misol: <code>{existing + 1}</code>"
         )
+        return
+
+    if state.get('state') == 'add_instagram_link' and is_admin(user_id):
+        normalized = normalize_instagram_link(text)
+        if not normalized:
+            bot.send_message(
+                user_id,
+                "❌ Instagram havolasi noto'g'ri.\n"
+                "Masalan: <code>@animebum1</code> yoki "
+                "<code>https://www.instagram.com/animebum1/</code>"
+            )
+            return
+        instagram_url, instagram_name = normalized
+        success = add_channel(
+            instagram_url,
+            instagram_name,
+            instagram_url,
+            user_id,
+            'instagram'
+        )
+        clear_state(user_id)
+        if success:
+            bot.send_message(
+                user_id,
+                f"✅ <b>Instagram havolasi qo'shildi!</b>\n\n"
+                f"📸 {instagram_name}\n"
+                f"🔗 {instagram_url}\n\n"
+                "ℹ️ Instagram obunasi tekshirilmaydi."
+            )
+        else:
+            bot.send_message(user_id, "❌ Bu Instagram havolasi allaqachon qo'shilgan!")
+        show_channels_menu(user_id)
         return
 
     if state.get('state') == 'add_episode_num' and is_admin(user_id):
@@ -3714,6 +3819,20 @@ def callback_handler(call):
                 "  • <code>https://t.me/animebum_1</code>  ← ommaviy kanal\n"
                 "  • <code>@animebum_1</code>  ← ommaviy kanal\n\n"
                 "⚠️ Botni avval shu kanalga <b>admin</b> qilib qo'shing!"
+            )
+            return
+
+        if data == "chadd_instagram" and is_admin(user_id):
+            bot.answer_callback_query(call.id)
+            set_state(user_id, 'add_instagram_link')
+            bot.send_message(
+                user_id,
+                "📸 <b>Instagram havolasini qo'shish</b>\n\n"
+                "Instagram username yoki to'liq havolasini yuboring:\n"
+                "Masalan: <code>@animebum1</code>\n"
+                "yoki <code>https://www.instagram.com/animebum1/</code>\n\n"
+                "ℹ️ Bu havola majburiy obuna oynasida ko'rsatiladi, "
+                "lekin Instagram obunasi tekshirilmaydi."
             )
             return
 
