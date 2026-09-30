@@ -37,6 +37,7 @@ ADMIN_IDS = [6998664132]
 
 BOT_USERNAME = "animebum_bot"
 BACKUP_CHAT_ID = "@animebumhotira"  # Backup kanal - bu o'zgarmaydi!
+DEFAULT_ONGOING_POST_CHANNEL = "-1003703704705"
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║                    🎭 JANRLAR RO'YXATI                       ║
@@ -292,6 +293,15 @@ def get_setting(key: str, default: str = None) -> Optional[str]:
         conn.close()
         return default
 
+
+def get_ongoing_post_channel() -> str:
+    """Eski username yoki yo'qolgan sozlama o'rniga aniq kanal ID'sini ishlatadi."""
+    configured = (get_setting('post_channel_ongoing_id') or '').strip()
+    if not configured or configured.lower() == '@ongoinbum':
+        return DEFAULT_ONGOING_POST_CHANNEL
+    return configured
+
+
 def set_setting(key: str, value: str):
     conn = sqlite3.connect('kino_bot.db')
     cursor = conn.cursor()
@@ -304,7 +314,7 @@ def get_manual_post_targets() -> dict:
     """Qo'lda post yuborish uchun asosiy va ongoing kanallar."""
     return {
         'anime': get_setting('post_channel_id') or '@animebum_1',
-        'ongoing': get_setting('post_channel_ongoing_id') or '@ongoinbum',
+        'ongoing': get_ongoing_post_channel(),
     }
 
 def get_episode_post_keyboard() -> InlineKeyboardMarkup:
@@ -345,9 +355,23 @@ def backup_data():
             dict(zip(['channel_id', 'channel_name', 'channel_url', 'channel_type'], r))
             for r in cursor.fetchall()
         ]
+        cursor.execute(
+            'CREATE TABLE IF NOT EXISTS settings '
+            '(key TEXT PRIMARY KEY, value TEXT)'
+        )
+        cursor.execute(
+            'SELECT key, value FROM settings WHERE key IN (?, ?)',
+            ('post_channel_id', 'post_channel_ongoing_id')
+        )
+        settings = [{'key': row[0], 'value': row[1]} for row in cursor.fetchall()]
         conn.close()
 
-        data_json = json.dumps({'movies': movies, 'episodes': episodes, 'channels': channels}, ensure_ascii=False, indent=2)
+        data_json = json.dumps({
+            'movies': movies,
+            'episodes': episodes,
+            'channels': channels,
+            'settings': settings,
+        }, ensure_ascii=False, indent=2)
         file_obj = io.BytesIO(data_json.encode('utf-8'))
         file_obj.name = 'kino_bot_backup.json'
 
@@ -358,8 +382,9 @@ def backup_data():
         )
         try:
             bot.pin_chat_message(backup_chat, msg.message_id, disable_notification=True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"❌ Backupni pin qilishda xato: {e}")
+            return False
         logger.info("✅ Backup saqlandi!")
         return True
     except Exception as e:
@@ -384,6 +409,10 @@ def restore_data():
 
         conn = sqlite3.connect('kino_bot.db')
         cursor = conn.cursor()
+        cursor.execute(
+            'CREATE TABLE IF NOT EXISTS settings '
+            '(key TEXT PRIMARY KEY, value TEXT)'
+        )
         restored_movies = 0
         restored_eps = 0
 
@@ -425,6 +454,18 @@ def restore_data():
                     'INSERT OR IGNORE INTO channels '
                     '(channel_id, channel_name, channel_url, channel_type) VALUES (?,?,?,?)',
                     (channel_id, ch['channel_name'], ch['channel_url'], channel_type)
+                )
+            except Exception:
+                pass
+
+        for setting in data.get('settings', []):
+            try:
+                key = setting.get('key')
+                if key not in ('post_channel_id', 'post_channel_ongoing_id'):
+                    continue
+                cursor.execute(
+                    'INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)',
+                    (key, str(setting.get('value', '')).strip())
                 )
             except Exception:
                 pass
@@ -1337,7 +1378,7 @@ def show_channels_menu(user_id: int):
         if is_supported_channel(channel)
     ]
     anime_ch = get_setting('post_channel_id') or "❌ Belgilanmagan"
-    ongoing_ch = get_setting('post_channel_ongoing_id') or "@ongoinbum"
+    ongoing_ch = get_ongoing_post_channel()
     keyboard = InlineKeyboardMarkup(row_width=1)
 
     text = "📡 <b>KANAL SOZLAMALARI</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -2552,9 +2593,16 @@ def text_handler(message):
     if state.get('state') == 'set_ongoing_post_channel' and is_admin(user_id):
         ch_id = text.strip()
         set_setting('post_channel_ongoing_id', ch_id)
+        backup_saved = backup_data()
         clear_state(user_id)
         bot.send_message(user_id,
-            f"✅ <b>Ongoing post kanali saqlandi!</b>\nKanal: <code>{ch_id}</code>")
+            f"✅ <b>Ongoing post kanali saqlandi!</b>\n"
+            f"Kanal: <code>{ch_id}</code>\n"
+            + (
+                "💾 Sozlama Telegram backup'iga ham yozildi."
+                if backup_saved else
+                "⚠️ Lokal saqlandi, lekin Telegram backup'iga yozilmadi."
+            ))
         show_channels_menu(user_id)
         return
 
@@ -3785,7 +3833,7 @@ def callback_handler(call):
 
         if data == "set_ongoing_post_ch" and is_admin(user_id):
             bot.answer_callback_query(call.id)
-            cur = get_setting('post_channel_ongoing_id') or "@ongoinbum"
+            cur = get_ongoing_post_channel()
             set_state(user_id, 'set_ongoing_post_channel')
             bot.send_message(user_id,
                 f"🔄 <b>Ongoing Post Kanal</b>\n\nHozirgi: <code>{cur}</code>\n\n"
